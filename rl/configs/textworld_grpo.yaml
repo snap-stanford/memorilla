@@ -1,0 +1,116 @@
+# GRPO training of the Memorilla memory module on TextWorld (frozen Qwen3-4B decoder, frozen Qwen3-Embedding-4B).
+# Composed on top of SkyRL's ppo_base_config; run through rl/train.sh, which fills in the data and output paths.
+defaults:
+  - ppo_base_config
+  - _self_
+
+data:
+  train_data: ???
+  val_data: ???
+
+# Shared by the memorilla modality and both environments: one placeholder token per memory slot.
+memory:
+  placeholder_token: "<|image_pad|>"
+  num_memories: 8
+
+modalities:
+  memorilla:
+    placeholder_token: ${memory.placeholder_token}
+    max_placeholder_tokens: ${memory.num_memories}
+    encoder:
+      target: skyrl_train.examples.modalities.memorilla_handlers:MemorillaEncoder
+      kwargs:
+        embedding_model: Qwen/Qwen3-Embedding-4B
+        embedding_device: cuda
+        embedding_dim: 2560
+        output_dim: 2560
+        num_memories: ${memory.num_memories}
+        num_heads: 8
+        num_self_attn_layers: 1
+        num_cross_attn_layers: 2
+        dropout: 0.1
+        checkpoint_path: null
+    projection:
+      target: skyrl_train.examples.modalities.memorilla_handlers:IdentityProjection
+      kwargs: {}
+    trainable:
+      encoder: true
+      projection: true
+
+environment:
+  env_class: textworld
+  skyrl_gym:
+    textworld:
+      max_turns: 50
+      memory_window: 1
+      max_memory_docs: 60
+      max_observation_chars: 200
+      memory_modality_id: memorilla
+      placeholder_token: ${memory.placeholder_token}
+      max_placeholder_tokens: ${memory.num_memories}
+      enable_memory: true
+    fast_textworld:
+      max_turns: 50
+      memory_window: 5
+      max_memory_docs: 4
+      max_observation_chars: 0
+      memory_modality_id: memorilla
+      placeholder_token: ${memory.placeholder_token}
+      max_placeholder_tokens: ${memory.num_memories}
+      enable_memory: true
+
+generator:
+  backend: vllm
+  run_engines_locally: true
+  async_engine: true
+  batched: false
+  num_inference_engines: 1
+  inference_engine_tensor_parallel_size: 1
+  weight_sync_backend: nccl
+  gpu_memory_utilization: 0.5
+  engine_init_kwargs:
+    max_model_len: 16384
+  max_input_length: 16000
+  max_turns: 50
+  refresh_modalities_each_step: true
+  n_samples_per_prompt: 16
+  sampling_params:
+    max_generate_length: 128
+    temperature: 1.0
+
+trainer:
+  policy:
+    model:
+      path: Qwen/Qwen3-4B-Instruct-2507
+      freeze_base_model: true
+    optimizer_config:
+      lr: 5.0e-4
+      num_warmup_steps: 0
+  placement:
+    colocate_all: true
+    policy_num_gpus_per_node: 1
+    ref_num_gpus_per_node: 1
+  algorithm:
+    advantage_estimator: grpo
+    use_kl_loss: false
+  epochs: 10
+  train_batch_size: 4
+  policy_mini_batch_size: 4
+  micro_forward_batch_size_per_gpu: 2
+  micro_train_batch_size_per_gpu: 2
+  update_epochs_per_batch: 1
+  max_prompt_length: 16000
+  eval_batch_size: 4
+  eval_before_train: false
+  eval_interval: 3
+  ckpt_interval: 3
+  resume_mode: latest
+  ckpt_path: ???
+  export_path: ???
+  logger: console
+  project_name: memorilla_textworld
+  run_name: textworld_grpo
+
+hydra:
+  run:
+    dir: ${trainer.export_path}/hydra/${now:%Y-%m-%d_%H-%M-%S}

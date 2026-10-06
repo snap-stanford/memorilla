@@ -1,0 +1,12 @@
+# Stage 3: one shared module fine-tuned on all evaluation benchmarks; every epoch is saved under runs/stage3/.
+datasets: [pv4, pmv2, factkg, triviaqa, narrativeqa, pubmedqa, lamp4, lamp7]
+init_memory: runs/stage2/epoch-00
+output_dir: runs/stage3
+max_length: 2048
+learning_rate: 1.0e-4
+warmup_ratio: 0.1
+max_epochs: 5
+batch_size: 2
+gradient_accumulation_steps: 8
+val_check_interval: 0.25
+devices: 4

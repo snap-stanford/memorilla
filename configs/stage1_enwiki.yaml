@@ -1,0 +1,11 @@
+# Stage 1: pretrain the memory module on EnWiki (Qwen3-8B decoder, 4 GPUs).
+datasets: [enwiki]
+output_dir: runs/stage1
+max_length: 1024
+learning_rate: 3.0e-4
+warmup_ratio: 0.03
+max_epochs: 1
+batch_size: 4
+gradient_accumulation_steps: 8
+val_check_interval: 0.1
+devices: 4

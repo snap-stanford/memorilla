@@ -1,0 +1,23 @@
+# Evaluation on held-out TextWorld games: 3 samples per prompt at temperature 0.6, scored as avg@3 and pass@3.
+# Same agent and memory setup as training; run through rl/evaluate.sh.
+defaults:
+  - textworld_grpo
+  - _self_
+
+data:
+  train_data: ${data.val_data}
+
+generator:
+  max_input_length: 4096
+  eval_n_samples_per_prompt: 3
+  eval_sampling_params:
+    temperature: 0.6
+
+trainer:
+  eval_only: true
+  eval_interval: 1
+  max_prompt_length: 4096
+  ckpt_interval: 0
+  resume_mode: null
+  dump_eval_results: true
+  run_name: textworld_eval

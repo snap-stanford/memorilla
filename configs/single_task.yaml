@@ -1,0 +1,11 @@
+# Single task: fine-tune the Stage 2 module on one dataset (override --datasets and --output_dir as needed).
+datasets: [lamp7]
+init_memory: runs/stage2/epoch-00
+output_dir: runs/single_task
+max_length: 2048
+learning_rate: 1.0e-4
+warmup_ratio: 0.1
+max_epochs: 5
+batch_size: 2
+gradient_accumulation_steps: 2
+devices: 4

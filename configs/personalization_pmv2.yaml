@@ -1,0 +1,11 @@
+# Personalisation: continue the Stage 3 module on PersonaMem-v2 alone.
+datasets: [pmv2]
+init_memory: runs/stage3/epoch-04
+output_dir: runs/personalization_pmv2
+max_length: 2048
+learning_rate: 1.0e-4
+warmup_ratio: 0.1
+max_epochs: 5
+batch_size: 2
+gradient_accumulation_steps: 2
+devices: 4

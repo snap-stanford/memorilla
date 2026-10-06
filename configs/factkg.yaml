@@ -1,0 +1,17 @@
+# FactKG from scratch: slots start from the claim's most similar triples (retrieval_init) on one GPU.
+datasets: [factkg]
+output_dir: runs/factkg
+system_prompt: >-
+  You are a fact-verification assistant. You receive a claim and a compressed memory of relevant
+  knowledge-graph triples about the entities in the claim. Decide whether the claim is supported by the
+  evidence. Output exactly 'True' or 'False' with no other text.
+retrieval_init: true
+max_length: 2048
+learning_rate: 1.0e-4
+warmup_ratio: 0.1
+max_epochs: 5
+batch_size: 2
+gradient_accumulation_steps: 8
+val_check_interval: 0.5
+devices: 1
+strategy: auto

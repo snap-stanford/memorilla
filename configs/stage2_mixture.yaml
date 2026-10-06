@@ -1,0 +1,12 @@
+# Stage 2: continue on the reading-comprehension, summarisation and open-domain QA mixture.
+datasets: [squad_v2, drop, coqa, pubmedqa, quail, pwc, cnn_dailymail, samsum, dialogsum, msmarco]
+init_memory: runs/stage1/epoch-00
+output_dir: runs/stage2
+max_length: 1024
+learning_rate: 3.0e-4
+warmup_ratio: 0.03
+max_epochs: 1
+batch_size: 4
+gradient_accumulation_steps: 8
+val_check_interval: 0.2
+devices: 4

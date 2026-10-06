@@ -217,3 +217,12 @@ evals/
 *.out
 *.err
 misc/
+.idea/
+.DS_Store
+/runs/
+/results/
+/data/
+/games/
+/pv4_data/
+lightning_logs/
+.memorilla.lock

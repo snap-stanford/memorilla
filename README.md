@@ -20,6 +20,10 @@ small budget, it achieves the best average performance against methods such as M
 even more accurate than giving the LLM every document (84.33% vs. 80.43%) while using 108× fewer tokens. Furthermore, Memorilla can also help an agent keep learning from its own history, raising its average
 success rate on TextWorld games from 18.6% to 24.2%.
 
+<p align="center">
+  <img src="assets/architecture.png" alt="Memorilla architecture" width="100%" />
+</p>
+
 ## Contents
 
 - [Installation](#installation)

@@ -1,9 +1,9 @@
 # Troubleshooting
 
 - **A multi-GPU run stalls.** With the NCCL 2.26 bundled with PyTorch 2.7, a multi-GPU run can hang in a collective
-  until the NCCL watchdog aborts it after 30 minutes. Check that NCCL 2.27.3 is installed
-  (`uv pip show nvidia-nccl-cu12`, or `pip show nvidia-nccl-cu12` in a pip environment; see
-  [Installation](../README.md#installation)), then resubmit the job; it resumes from `last.ckpt`.
+  until the NCCL watchdog aborts it after 30 minutes. The uv installation pins NCCL 2.27.3; check it with
+  `uv pip show nvidia-nccl-cu12` (see [Installation](../README.md#installation)), then resubmit the job; it resumes from
+  `last.ckpt`.
 - **Evaluation is slow when several runs share a machine.** Prompt preparation and scoring are CPU-bound; give each
   `evaluate.py` process about 16 CPU cores, or set `OMP_NUM_THREADS` accordingly.
 - **METEOR fails on an offline machine.** METEOR needs NLTK's `wordnet` and `punkt` data, which is downloaded on first

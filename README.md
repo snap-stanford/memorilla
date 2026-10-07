@@ -39,59 +39,55 @@ success rate on TextWorld games from 18.6% to 24.2%.
 
 ## Installation
 
-Memorilla needs Python 3.11 and Linux with CUDA GPUs; the recipes were run on NVIDIA H100 80GB GPUs. With
+Memorilla needs Linux with CUDA GPUs and Python 3.11; the recipes were run on NVIDIA H100 80GB GPUs. Install it with
 [uv](https://docs.astral.sh/uv/):
 
 ```bash
-git clone https://github.com/snap-stanford/memorilla.git
-cd memorilla
-uv venv --python 3.11
-source .venv/bin/activate
-uv pip install -e .                                          # PyTorch 2.7 (CUDA 12.6), vLLM 0.9.1, Transformers, Lightning
-uv pip install setuptools wheel packaging ninja psutil
-uv pip install --no-build-isolation flash-attn==2.7.4.post1  # FlashAttention-2, the default attention for training
+$ git clone https://github.com/snap-stanford/memorilla.git && cd memorilla
+$ uv venv --python 3.11 && source .venv/bin/activate
+$ uv pip install -e .
+$ uv pip install --no-build-isolation flash-attn==2.7.4.post1
 ```
 
-With pip, in any Python 3.11 environment:
+The last command installs FlashAttention-2, which training uses by default. Evaluation does not need it, and training
+can use PyTorch's attention instead:
 
 ```bash
-pip install -e .
-pip install nvidia-nccl-cu12==2.27.3                         # pip reports a conflict with torch's pin; it is safe
-pip install --no-build-isolation --no-cache-dir flash-attn==2.7.4.post1
+$ scripts/train.sh configs/stage1_enwiki.yaml --attn_implementation sdpa
 ```
 
-The NCCL 2.26 that PyTorch 2.7 ships with can hang multi-GPU training; uv installs NCCL 2.27.3 instead (set in
-`pyproject.toml`), and the second pip line does the same.
+Optional extras:
 
-Optional extras: `.[dev]` (tests, linters, pre-commit), `.[wandb]` (Weights & Biases logging),
-`.[personalizationv4]` (OpenAI client for the PersonalizationV4 pipeline) and `.[rl]` (TextWorld for the RL data
-tools), e.g. `uv pip install -e ".[dev,wandb]"`. Training uses FlashAttention-2 by default; pass
-`--attn_implementation sdpa` to use PyTorch's attention instead.
+```bash
+$ uv pip install -e ".[dev]"                 # tests, linters and pre-commit
+$ uv pip install -e ".[wandb]"               # Weights & Biases logging
+$ uv pip install -e ".[personalizationv4]"   # OpenAI client for the PersonalizationV4 pipeline
+$ uv pip install -e ".[rl]"                  # TextWorld, for the RL data tools
+```
 
 ## Quickstart
 
-No trained memory modules are distributed: the recipes below train them, and evaluation reads the checkpoints
-`train.py` writes. The data and its precomputed embeddings are downloaded from
+The recipes below train the memory module, and evaluates it on benchmarks. The data and its precomputed embeddings are downloaded from
 [`memorilla/Memorilla-Data`](https://huggingface.co/datasets/memorilla/Memorilla-Data) on first use.
 
 ```bash
 # Train the three stages with the Qwen3-8B decoder on 4 GPUs.
-scripts/train.sh configs/stage1_enwiki.yaml
-scripts/train.sh configs/stage2_mixture.yaml
-scripts/train.sh configs/stage3_multitask.yaml
+$ scripts/train.sh configs/stage1_enwiki.yaml
+$ scripts/train.sh configs/stage2_mixture.yaml
+$ scripts/train.sh configs/stage3_multitask.yaml
 
 # Continue on the personalisation benchmarks.
-scripts/train.sh configs/personalization_pv4.yaml
-scripts/train.sh configs/personalization_pmv2.yaml
+$ scripts/train.sh configs/personalization_pv4.yaml
+$ scripts/train.sh configs/personalization_pmv2.yaml
 
 # Evaluate a checkpoint on every benchmark (or name one, e.g. factkg).
-scripts/evaluate.sh runs/stage3/epoch-04 all
-scripts/evaluate.sh runs/personalization_pv4/epoch-04 pv4
+$ scripts/evaluate.sh runs/stage3/epoch-04 all
+$ scripts/evaluate.sh runs/personalization_pv4/epoch-04 pv4
 
 # Text-only baselines: closed book, RAG over the top-5 documents, full context.
-scripts/baselines.sh closed_book all
-scripts/baselines.sh rag all --top_k 5
-scripts/baselines.sh full_context triviaqa
+$ scripts/baselines.sh closed_book all
+$ scripts/baselines.sh rag all --top_k 5
+$ scripts/baselines.sh full_context triviaqa
 ```
 
 On 4 H100 80GB GPUs, the three stages take about 19 hours and download about 310 GiB of data and embeddings, and
@@ -106,8 +102,8 @@ question and the columns `collection_id`, `question`, `answer` and `documents`, 
 repository. The embeddings are computed on first use.
 
 ```bash
-python train.py --config configs/single_task.yaml --data_repo my_data --datasets my_task --output_dir runs/my_task
-python evaluate.py --data_repo my_data --config my_task --split test --scoring generation --checkpoint runs/my_task/epoch-04
+$ python train.py --config configs/single_task.yaml --data_repo my_data --datasets my_task --output_dir runs/my_task
+$ python evaluate.py --data_repo my_data --config my_task --split test --scoring generation --checkpoint runs/my_task/epoch-04
 ```
 
 The `single_task` recipe warm-starts from the Stage 2 checkpoint; pass `--init_memory ""` to train from scratch. The
@@ -124,12 +120,12 @@ from memorilla import MemoryModule
 
 memory = MemoryModule(embedding_dim=2560, output_dim=4096)  # Qwen3-Embedding-4B -> Qwen3-8B, K = 16
 
-doc_embeds = torch.randn(2, 200, 2560)                    # [batch, num_docs, embedding_dim]
+doc_embeds = torch.randn(2, 200, 2560)  # [batch, num_docs, embedding_dim]
 doc_padding_mask = torch.zeros(2, 200, dtype=torch.bool)  # True marks padded documents
-question_embeds = torch.randn(2, 2560)                    # [batch, embedding_dim]
+question_embeds = torch.randn(2, 2560)  # [batch, embedding_dim]
 memory_tokens = memory(doc_embeds, doc_padding_mask, question_embeds)  # [2, 16, 4096]
 
-memory.save("my_memory")                                  # memory.pt + config.json
+memory.save("my_memory")  # memory.pt + config.json
 memory = MemoryModule.from_pretrained("runs/stage3/epoch-04")
 ```
 
@@ -174,10 +170,10 @@ and documents its installation, data, training and evaluation.
 ## Development
 
 ```bash
-uv pip install -e ".[dev]"
-pytest                             # unit tests (CPU only, no network)
-ruff check . && black --check .    # lint
-pre-commit install                 # run the same checks on every commit
+$ uv pip install -e ".[dev]"
+$ pytest                             # unit tests (CPU only, no network)
+$ ruff check . && black --check .    # lint
+$ pre-commit install                 # run the same checks on every commit
 ```
 
 Set `MEMORILLA_TEST_CHECKPOINTS` to a directory of checkpoints to also check that each one loads strictly and runs.

@@ -156,6 +156,14 @@ memory module with GRPO on [TextWorld](https://github.com/microsoft/TextWorld) t
 [SkyRL-Memorilla](https://github.com/Adibvafa/SkyRL-Memorilla), a fork of [SkyRL](https://github.com/NovaSky-AI/SkyRL),
 and documents its installation, data, training and evaluation.
 
+<p align="center">
+  <img src="assets/textworld_replay.gif" alt="Replay of a held-out TextWorld game with and without Memorilla" width="100%" />
+</p>
+
+A schematic replay of one held-out game (routes simplified, observations paraphrased). With only its full history in
+context, the agent revisits explored rooms until the 50-turn limit; with 8 trained memory tokens added, it reaches the
+goal.
+
 ## Documentation
 
 | Guide | Contents |

@@ -28,6 +28,7 @@ success rate on TextWorld games from 18.6% to 24.2%.
 
 - [Installation](#installation)
 - [Quickstart](#quickstart)
+- [Checkpoints](#checkpoints)
 - [Using your own data](#using-your-own-data)
 - [Using the memory module in Python](#using-the-memory-module-in-python)
 - [PersonalizationV4](#personalizationv4)
@@ -93,6 +94,28 @@ $ scripts/baselines.sh full_context triviaqa
 On 4 H100 80GB GPUs, the three stages take about 19 hours and download about 310 GiB of data and embeddings, and
 evaluating a checkpoint on all eight benchmarks takes about 15 minutes on one GPU. The [training](docs/training.md) and
 [evaluation](docs/evaluation.md) guides describe the main options, and each script's `--help` lists all of them.
+
+## Checkpoints
+
+The Stage 1 and Stage 2 memory modules are on Hugging Face at
+[`memorilla/Memorilla-Qwen3-8B`](https://huggingface.co/memorilla/Memorilla-Qwen3-8B). Both were trained with the
+Qwen3-8B decoder and the Qwen3-Embedding-4B encoder, the defaults of `train.py` and `evaluate.py`.
+
+| Checkpoint | Folder | Recipe |
+| --- | --- | --- |
+| Stage 1 | `stage1/` | `configs/stage1_enwiki.yaml` |
+| Stage 2 | `stage2/` | `configs/stage2_mixture.yaml` |
+
+```bash
+$ hf download memorilla/Memorilla-Qwen3-8B --local-dir checkpoints
+$ scripts/train.sh configs/stage3_multitask.yaml --init_memory checkpoints/stage2  # continue from Stage 2
+```
+
+```python
+from memorilla import MemoryModule
+
+memory = MemoryModule.from_pretrained("checkpoints/stage2")
+```
 
 ## Using your own data
 

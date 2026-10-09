@@ -97,24 +97,28 @@ evaluating a checkpoint on all eight benchmarks takes about 15 minutes on one GP
 
 ## Checkpoints
 
-The Stage 1 and Stage 2 memory modules are on Hugging Face at
-[`memorilla/Memorilla-Qwen3-8B`](https://huggingface.co/memorilla/Memorilla-Qwen3-8B). Both were trained with the
+The trained memory modules are on Hugging Face at
+[`memorilla/Memorilla-Qwen3-8B`](https://huggingface.co/memorilla/Memorilla-Qwen3-8B). All were trained with the
 Qwen3-8B decoder and the Qwen3-Embedding-4B encoder, the defaults of `train.py` and `evaluate.py`.
 
 | Checkpoint | Folder | Recipe |
 | --- | --- | --- |
 | Stage 1 | `stage1/` | `configs/stage1_enwiki.yaml` |
 | Stage 2 | `stage2/` | `configs/stage2_mixture.yaml` |
+| Stage 3 (`epoch-00`) | `stage3/` | `configs/stage3_multitask.yaml` |
+| PersonalizationV4, from Stage 1 | `pv4/` | `configs/single_task.yaml` |
+| PersonaMem-v2, from Stage 1 | `pmv2/` | `configs/single_task.yaml` |
 
 ```bash
 $ hf download memorilla/Memorilla-Qwen3-8B --local-dir checkpoints
+$ scripts/evaluate.sh checkpoints/pv4 pv4                                          # evaluate a checkpoint
 $ scripts/train.sh configs/stage3_multitask.yaml --init_memory checkpoints/stage2  # continue from Stage 2
 ```
 
 ```python
 from memorilla import MemoryModule
 
-memory = MemoryModule.from_pretrained("checkpoints/stage2")
+memory = MemoryModule.from_pretrained("checkpoints/stage3")
 ```
 
 ## Using your own data

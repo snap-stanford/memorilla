@@ -27,10 +27,10 @@ success rate on TextWorld games from 18.6% to 24.2%.
 ## Contents
 
 - [Installation](#installation)
-- [Quickstart](#quickstart)
+- [Getting started](#getting-started)
+- [Training and Evaluation](#training-and-evaluation)
 - [Checkpoints](#checkpoints)
 - [Using your own data](#using-your-own-data)
-- [Using the memory module in Python](#using-the-memory-module-in-python)
 - [PersonalizationV4](#personalizationv4)
 - [Reinforcement learning on TextWorld](#reinforcement-learning-on-textworld)
 - [Documentation](#documentation)
@@ -50,6 +50,9 @@ $ uv pip install -e .
 $ uv pip install --no-build-isolation flash-attn==2.7.4.post1
 ```
 
+<details>
+<summary>FlashAttention-2 and optional extras</summary>
+
 The last command installs FlashAttention-2, which training uses by default. Evaluation does not need it, and training
 can use PyTorch's attention instead:
 
@@ -66,9 +69,71 @@ $ uv pip install -e ".[personalizationv4]"   # OpenAI client for the Personaliza
 $ uv pip install -e ".[rl]"                  # TextWorld, for the RL data tools
 ```
 
-## Quickstart
+</details>
 
-The recipes below train the memory module, and evaluates it on benchmarks. The data and its precomputed embeddings are downloaded from
+## Getting started
+
+Here is an example from the PersonaMem-v2 test set. The user has had 107 earlier conversations with an assistant,
+about 32,000 tokens in total, and now asks a new question. Memorilla reads all of the conversations and hands them to
+a frozen Qwen3-8B as just 16 memory tokens, about 2,000 times fewer. You need one 80 GB GPU, and the first run
+downloads about 25 GB of models and the 37 MB test set.
+
+```python
+import torch
+from huggingface_hub import snapshot_download
+
+from memorilla import MemoryModule
+from memorilla.benchmarks import PERSONA_PROMPT
+from memorilla.data import apply_chat_template, build_messages, ensure_data, load_split
+from memorilla.embeddings import embed_texts, load_encoder
+from memorilla.vllm import MemoryVLLM
+
+row = load_split("pmv2", "test", ensure_data("pmv2", ["test"]))[73]  # one user's question and past conversations
+documents, question = row["documents"], row["question"]
+
+encoder = load_encoder("Qwen/Qwen3-Embedding-4B", gpu_memory_utilization=0.25)
+embeddings = torch.from_numpy(embed_texts(encoder, documents + [question]))  # one vector per text
+
+checkpoint = snapshot_download("memorilla/Memorilla-Qwen3-8B", allow_patterns=["pmv2/*"])
+model = MemoryVLLM("Qwen/Qwen3-8B", MemoryModule.from_pretrained(f"{checkpoint}/pmv2"))
+
+messages = build_messages(question, PERSONA_PROMPT, num_memories=16)  # reserves 16 <|memory|> positions
+prompt = apply_chat_template(model.tokenizer, messages, add_generation_prompt=True)
+answer = model.generate(
+    **model.tokenizer(prompt, return_tensors="pt"),
+    doc_embeds=embeddings[None, :-1],
+    doc_padding_mask=torch.zeros(1, len(documents), dtype=torch.bool),
+    question_embeds=embeddings[-1:],
+)
+print(f"Question: {question}\nMemorilla: {answer[0].strip()}")
+```
+
+Output:
+
+> **Question:** What are some easy breakfast ideas that will keep me full all morning?
+>
+> **Memorilla:** Since you’ve got a family history of type 2 diabetes, you might enjoy breakfasts that balance
+> protein, healthy fats, and fiber to keep you full without spiking blood sugar—like scrambled eggs with avocado and a
+> side of roasted veggies, or Greek yogurt with chia seeds and berries. These options give you steady energy while
+> keeping your blood sugar in check.
+
+> [!NOTE]
+> The user never says that diabetes runs in their family. The only clue is in one of the 107 conversations, where they
+> asked whether diabetes on the mother's side of the family raises a person's risk more than on the father's side.
+> Memorilla connects that clue to a breakfast question that has nothing to do with it, while Qwen3-8B without the
+> memory answers with a generic list of breakfasts.
+
+This is just one example. Because the LLM always receives the same **16 memory tokens**, no matter how many documents
+are stored, the approach can potentially scale to millions of tokens. In the paper, Memorilla compresses books and
+movie scripts from NarrativeQA by **more than 4,000x**. On one H100, growing a collection from 1 to **512 documents
+(about 128K tokens)** leaves Memorilla's response time at **0.74 seconds**, while putting all the documents in the
+prompt slows the model down from 0.75 to **19.9 seconds, 27x slower**.
+
+The other checkpoints listed under [Checkpoints](#checkpoints) load the same way.
+
+## Training and Evaluation
+
+The recipes below train the memory module from scratch, and evaluates it on benchmarks. The data and its precomputed embeddings are downloaded from
 [`memorilla/Memorilla-Data`](https://huggingface.co/datasets/memorilla/Memorilla-Data) on first use.
 
 ```bash
@@ -135,37 +200,6 @@ $ python evaluate.py --data_repo my_data --config my_task --split test --scoring
 
 The `single_task` recipe warm-starts from the Stage 2 checkpoint; pass `--init_memory ""` to train from scratch. The
 [data guide](docs/data.md#using-your-own-data) covers the file layout, document chunking and scoring options.
-
-## Using the memory module in Python
-
-`MemoryModule` is a plain `nn.Module`:
-
-```python
-import torch
-
-from memorilla import MemoryModule
-
-memory = MemoryModule(embedding_dim=2560, output_dim=4096)  # Qwen3-Embedding-4B -> Qwen3-8B, K = 16
-
-doc_embeds = torch.randn(2, 200, 2560)  # [batch, num_docs, embedding_dim]
-doc_padding_mask = torch.zeros(2, 200, dtype=torch.bool)  # True marks padded documents
-question_embeds = torch.randn(2, 2560)  # [batch, embedding_dim]
-memory_tokens = memory(doc_embeds, doc_padding_mask, question_embeds)  # [2, 16, 4096]
-
-memory.save("my_memory")  # memory.pt + config.json
-memory = MemoryModule.from_pretrained("runs/stage3/epoch-04")
-```
-
-Options: `num_memories`, `num_heads`, `num_self_attn_layers`, `num_cross_attn_layers`, `dropout` and
-`retrieval_init`. `from_pretrained` reads `config.json` when present and otherwise infers the architecture from the
-weights. The other building blocks:
-
-- `memorilla.llm.MemoryLLM`: Hugging Face decoder with memory injection, used for training.
-- `memorilla.vllm.MemoryVLLM`: vLLM decoder fed prompt embeddings, used for evaluation.
-- `memorilla.embeddings.EmbeddingStore`: stored document and question embeddings of one config and split.
-- `memorilla.data.MemoryCollator`: turns rows into decoder inputs with memory placeholders and padded embeddings.
-
-`train.py` and `evaluate.py` show them working together.
 
 ## PersonalizationV4
 

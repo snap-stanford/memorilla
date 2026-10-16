@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"  # weekly, to catch breakage from new releases of unpinned dependencies
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0  # setup-uv publishes no floating major tag
+        with:
+          python-version: "3.11"
+      - run: uvx pre-commit run --all-files --show-diff-on-failure
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0  # setup-uv publishes no floating major tag
+        with:
+          python-version: "3.11"
+          activate-environment: true
+      # The unit tests need neither a GPU nor vLLM, so CI installs the CPU build of PyTorch and leaves out vLLM.
+      - name: Install
+        run: |
+          uv pip install torch==2.7.0 --index-url https://download.pytorch.org/whl/cpu
+          echo "vllm; sys_platform == 'never'" > "$RUNNER_TEMP/no-vllm.txt"
+          uv pip install -e ".[dev]" --override "$RUNNER_TEMP/no-vllm.txt"
+          python -m nltk.downloader -q wordnet punkt
+      - run: pytest -ra

@@ -1,0 +1,49 @@
+cff-version: 1.2.0
+message: If you use this software, please cite the paper below.
+title: "Memorilla: Latent Semantic Memory for LLMs"
+type: software
+authors:
+  - given-names: Adibvafa
+    family-names: Fallahpour
+  - given-names: Parsa
+    family-names: Idehpour
+  - given-names: Vignesh
+    family-names: Kothapalli
+  - given-names: Nikita
+    family-names: Mounier
+  - given-names: Shirley
+    family-names: Wu
+  - given-names: Shayan
+    family-names: Pardis
+  - given-names: Jure
+    family-names: Leskovec
+repository-code: https://github.com/snap-stanford/memorilla
+url: https://memory.stanford.edu
+license: Apache-2.0
+version: 1.0.0
+keywords:
+  - memory
+  - long context
+  - large language models
+  - personalization
+preferred-citation:
+  type: conference-paper
+  title: "Memorilla: Latent Semantic Memory for LLMs"
+  authors:
+    - given-names: Adibvafa
+      family-names: Fallahpour
+    - given-names: Parsa
+      family-names: Idehpour
+    - given-names: Vignesh
+      family-names: Kothapalli
+    - given-names: Nikita
+      family-names: Mounier
+    - given-names: Shirley
+      family-names: Wu
+    - given-names: Shayan
+      family-names: Pardis
+    - given-names: Jure
+      family-names: Leskovec
+  collection-title: "COLM Workshop on Context Beyond the Window: Persistent Knowledge in Language Models"
+  year: 2026
+  url: https://openreview.net/forum?id=VV0vvzL783

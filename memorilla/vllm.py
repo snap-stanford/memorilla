@@ -1,6 +1,7 @@
 """Inference-time wrapper: a frozen vLLM decoder fed prompt embeddings that carry memory tokens."""
 
 from pathlib import Path
+from typing import Any
 
 from huggingface_hub import snapshot_download
 from safetensors import safe_open
@@ -9,12 +10,16 @@ import torch.nn as nn
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 
+from memorilla.data import DEFAULT_SYSTEM_PROMPT, apply_chat_template, build_messages
+from memorilla.embeddings import embed_texts, load_encoder
 from memorilla.llm import inject_memory
 from memorilla.memory import MemoryModule
+from memorilla.paths import DEFAULT_DECODER, DEFAULT_ENCODER
 from memorilla.utils import local_model_path, prepare_tokenizer
 
 EMBEDDING_WEIGHT_KEYS = ("model.embed_tokens.weight", "embed_tokens.weight", "transformer.wte.weight")
 DECODER_GPU_MEMORY_UTILIZATION = 0.6
+SHARED_ENCODER_GPU_MEMORY_UTILIZATION = 0.25  # the encoder's share when it runs next to the decoder
 
 
 class MemoryVLLM:
@@ -22,7 +27,8 @@ class MemoryVLLM:
 
     vLLM serves the decoder with prompt embeddings enabled. A standalone copy of the decoder's input embedding matrix
     turns token ids into embeddings, the memory tokens are scattered into the ``<|memory|>`` positions, and each
-    row's left padding is removed before the request is sent.
+    row's left padding is removed before the request is sent. ``from_pretrained`` and ``answer`` cover the common
+    case of answering one question from raw document texts.
     """
 
     def __init__(
@@ -34,6 +40,7 @@ class MemoryVLLM:
         cache_dir: str | None = None,
         tensor_parallel_size: int = 1,
         device: str = "cuda",
+        encoder: LLM | None = None,
     ) -> None:
         """Start the vLLM engine and load the embedding matrix.
 
@@ -45,12 +52,14 @@ class MemoryVLLM:
             cache_dir: Model cache directory (None uses the Hugging Face default).
             tensor_parallel_size: Number of GPUs for tensor parallelism.
             device: Device for the memory module and the embedding matrix.
+            encoder: Embedding engine from ``load_encoder``; only ``answer`` needs it.
         """
         self.decoder = decoder
         self.cache_dir = cache_dir
         self.model_path = local_model_path(decoder, cache_dir)
         self.device = torch.device(device)
         self.memory = memory.to(device=self.device, dtype=torch.bfloat16).eval()
+        self.encoder = encoder
 
         self.tokenizer = AutoTokenizer.from_pretrained(decoder, cache_dir=cache_dir, trust_remote_code=True)
         self.memory_token_id = prepare_tokenizer(self.tokenizer)
@@ -66,6 +75,39 @@ class MemoryVLLM:
             tensor_parallel_size=tensor_parallel_size,
         )
         self.embed_tokens = self._load_embedding_matrix()
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        checkpoint: str | Path,
+        subfolder: str | None = None,
+        decoder: str = DEFAULT_DECODER,
+        encoder: str = DEFAULT_ENCODER,
+        cache_dir: str | None = None,
+        encoder_gpu_memory_utilization: float = SHARED_ENCODER_GPU_MEMORY_UTILIZATION,
+        **kwargs: Any,
+    ) -> "MemoryVLLM":
+        """Load a memory checkpoint together with its decoder and encoder.
+
+        Args:
+            checkpoint: Checkpoint directory, or a Hub model repo id such as ``memorilla/Memorilla-Qwen3-8B``.
+            subfolder: Checkpoint folder inside ``checkpoint`` (e.g. ``pmv2``); only that folder is downloaded.
+            decoder: Decoder the checkpoint was trained with.
+            encoder: Encoder of the documents and questions.
+            cache_dir: Model cache directory (None uses the Hugging Face default).
+            encoder_gpu_memory_utilization: Fraction of GPU memory the encoder may use.
+            **kwargs: Further constructor arguments, e.g. ``max_model_len``.
+
+        Returns:
+            The model, ready for ``answer``.
+        """
+        path = Path(checkpoint).expanduser()
+        if not path.exists():
+            patterns = [f"{subfolder}/*"] if subfolder else None
+            path = Path(snapshot_download(repo_id=str(checkpoint), allow_patterns=patterns, cache_dir=cache_dir))
+        memory = MemoryModule.from_pretrained(path / subfolder if subfolder else path)
+        engine = load_encoder(encoder, cache_dir=cache_dir, gpu_memory_utilization=encoder_gpu_memory_utilization)
+        return cls(decoder, memory, cache_dir=cache_dir, encoder=engine, **kwargs)
 
     def _load_embedding_matrix(self) -> nn.Embedding:
         """Load the decoder's input embedding matrix from its safetensors shards.
@@ -136,3 +178,43 @@ class MemoryVLLM:
         sampling = SamplingParams(max_tokens=max_new_tokens, temperature=temperature, top_p=top_p)
         outputs = self.engine.generate(requests, sampling_params=sampling, use_tqdm=False)
         return [output.outputs[0].text for output in outputs]
+
+    def answer(
+        self,
+        question: str,
+        documents: list[str],
+        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+        max_new_tokens: int = 256,
+    ) -> str:
+        """Answer one question from a collection of documents.
+
+        The encoder embeds every document and the question, the memory module turns these embeddings into memory
+        tokens, and the decoder answers greedily with the memory tokens in its system prompt.
+
+        Args:
+            question: The question.
+            documents: The document texts.
+            system_prompt: System prompt; the memory placeholder is appended to it.
+            max_new_tokens: Maximum number of generated tokens.
+
+        Returns:
+            The answer without surrounding whitespace.
+
+        Raises:
+            ValueError: If the model has no encoder.
+        """
+        if self.encoder is None:
+            raise ValueError("answer() needs an encoder; load the model with from_pretrained or pass encoder=.")
+        embeddings = torch.from_numpy(embed_texts(self.encoder, [*documents, question]))  # one vector per text
+        messages = build_messages(question, system_prompt, num_memories=self.memory.num_memories)
+        prompt = apply_chat_template(self.tokenizer, messages, add_generation_prompt=True)
+        inputs = self.tokenizer(prompt, return_tensors="pt")
+        (answer,) = self.generate(
+            inputs["input_ids"],
+            inputs["attention_mask"],
+            doc_embeds=embeddings[None, :-1],
+            doc_padding_mask=torch.zeros(1, len(documents), dtype=torch.bool),
+            question_embeds=embeddings[-1:],
+            max_new_tokens=max_new_tokens,
+        )
+        return answer.strip()

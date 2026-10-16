@@ -79,33 +79,15 @@ a frozen Qwen3-8B as just 16 memory tokens, about 2,000 times fewer. You need on
 downloads about 25 GB of models and the 37 MB test set.
 
 ```python
-import torch
-from huggingface_hub import snapshot_download
-
-from memorilla import MemoryModule
 from memorilla.benchmarks import PERSONA_PROMPT
-from memorilla.data import apply_chat_template, build_messages, ensure_data, load_split
-from memorilla.embeddings import embed_texts, load_encoder
+from memorilla.data import ensure_data, load_split
 from memorilla.vllm import MemoryVLLM
 
 row = load_split("pmv2", "test", ensure_data("pmv2", ["test"]))[73]  # one user's question and past conversations
-documents, question = row["documents"], row["question"]
 
-encoder = load_encoder("Qwen/Qwen3-Embedding-4B", gpu_memory_utilization=0.25)
-embeddings = torch.from_numpy(embed_texts(encoder, documents + [question]))  # one vector per text
-
-checkpoint = snapshot_download("memorilla/Memorilla-Qwen3-8B", allow_patterns=["pmv2/*"])
-model = MemoryVLLM("Qwen/Qwen3-8B", MemoryModule.from_pretrained(f"{checkpoint}/pmv2"))
-
-messages = build_messages(question, PERSONA_PROMPT, num_memories=16)  # reserves 16 <|memory|> positions
-prompt = apply_chat_template(model.tokenizer, messages, add_generation_prompt=True)
-answer = model.generate(
-    **model.tokenizer(prompt, return_tensors="pt"),
-    doc_embeds=embeddings[None, :-1],
-    doc_padding_mask=torch.zeros(1, len(documents), dtype=torch.bool),
-    question_embeds=embeddings[-1:],
-)
-print(f"Question: {question}\nMemorilla: {answer[0].strip()}")
+model = MemoryVLLM.from_pretrained("memorilla/Memorilla-Qwen3-8B", "pmv2")  # Qwen3-8B, the memory module and the encoder
+answer = model.answer(row["question"], row["documents"], system_prompt=PERSONA_PROMPT)
+print(f"Question: {row['question']}\nMemorilla: {answer}")
 ```
 
 Output:

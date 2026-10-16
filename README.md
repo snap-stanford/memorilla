@@ -4,7 +4,7 @@
 </h1>
 
 <p align="center">
-  <a href="https://openreview.net/forum?id=VV0vvzL783"><img src="https://img.shields.io/badge/paper-OpenReview-blue?logo=arxiv&logoColor=white" alt="Paper"></a>
+  <a href="https://arxiv.org/abs/2610.21375"><img src="https://img.shields.io/badge/paper-arXiv-blue?logo=arxiv&logoColor=white" alt="Paper"></a>
   <a href="https://memory.stanford.edu/"><img src="https://img.shields.io/badge/website-memory.stanford.edu-7E57C2?logo=googlechrome&logoColor=white" alt="Website"></a>
   <a href="https://huggingface.co/memorilla"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-memorilla-yellow" alt="Hugging Face"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green" alt="License: Apache-2.0"></a>
@@ -12,7 +12,7 @@
 
 This repository provides code for training and evaluating Memorilla, a memory system that gathers information from an
 entire document collection into a fixed number of query-dependent memory tokens for a frozen LLM. The code is based on
-our paper *[Memorilla: Latent Semantic Memory for LLMs](https://openreview.net/forum?id=VV0vvzL783)*.
+our paper *[Memorilla: Latent Semantic Memory for LLMs](https://arxiv.org/abs/2610.21375)*.
 
 A frozen LLM can only use what fits in its context window, so Memorilla reads an entire document collection, such as a
 user's past chats or a long book, and hands the LLM just 16 memory tokens that carry what each question needs. With this

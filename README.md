@@ -232,12 +232,11 @@ Set `MEMORILLA_TEST_CHECKPOINTS` to a directory of checkpoints to also check tha
 ## Citation
 
 ```bibtex
-@inproceedings{fallahpour2026memorilla,
-  title     = {Memorilla: Latent Semantic Memory for {LLM}s},
-  author    = {Adibvafa Fallahpour and Parsa Idehpour and Vignesh Kothapalli and Nikita Mounier and Shirley Wu and Shayan Pardis and Jure Leskovec},
-  booktitle = {COLM Workshop on Context Beyond the Window: Persistent Knowledge in Language Models},
-  year      = {2026},
-  url       = {https://openreview.net/forum?id=VV0vvzL783}
+@article{fallahpour2026memorilla,
+  title={Memorilla: Latent Semantic Memory for LLMs},
+  author={Fallahpour, Adibvafa and Idehpour, Parsa and Kothapalli, Vignesh and Mounier, Nikita and Wu, Shirley and Pardis, Shayan and Leskovec, Jure},
+  journal={arXiv preprint arXiv:2610.21375},
+  year={2026}
 }
 ```
 

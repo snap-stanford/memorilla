@@ -1,14 +1,15 @@
 """Inference-time wrapper: a frozen vLLM decoder fed prompt embeddings that carry memory tokens."""
 
+from importlib import import_module
 from pathlib import Path
-from typing import Any
+from types import ModuleType
+from typing import TYPE_CHECKING, Any
 
 from huggingface_hub import snapshot_download
 from safetensors import safe_open
 import torch
 import torch.nn as nn
 from transformers import AutoTokenizer
-from vllm import LLM, SamplingParams
 
 from memorilla.data import DEFAULT_SYSTEM_PROMPT, apply_chat_template, build_messages
 from memorilla.embeddings import embed_texts, load_encoder
@@ -17,9 +18,32 @@ from memorilla.memory import MemoryModule
 from memorilla.paths import DEFAULT_DECODER, DEFAULT_ENCODER
 from memorilla.utils import local_model_path, prepare_tokenizer
 
+if TYPE_CHECKING:
+    from vllm import LLM
+
 EMBEDDING_WEIGHT_KEYS = ("model.embed_tokens.weight", "embed_tokens.weight", "transformer.wte.weight")
 DECODER_GPU_MEMORY_UTILIZATION = 0.6
 SHARED_ENCODER_GPU_MEMORY_UTILIZATION = 0.25  # the encoder's share when it runs next to the decoder
+
+
+def _require_vllm() -> ModuleType:
+    """Load the runtime only when inference is requested.
+
+    Returns:
+        The vLLM module.
+
+    Raises:
+        ImportError: If vLLM is not installed.
+    """
+    try:
+        return import_module("vllm")
+    except ModuleNotFoundError as error:
+        if error.name != "vllm":
+            raise
+        raise ImportError(
+            "MemoryVLLM inference requires vLLM; install the project dependencies with "
+            "`uv pip install -e .` on a supported CUDA system."
+        ) from error
 
 
 class MemoryVLLM:
@@ -40,7 +64,7 @@ class MemoryVLLM:
         cache_dir: str | None = None,
         tensor_parallel_size: int = 1,
         device: str = "cuda",
-        encoder: LLM | None = None,
+        encoder: "LLM | None" = None,
     ) -> None:
         """Start the vLLM engine and load the embedding matrix.
 
@@ -54,6 +78,7 @@ class MemoryVLLM:
             device: Device for the memory module and the embedding matrix.
             encoder: Embedding engine from ``load_encoder``; only ``answer`` needs it.
         """
+        runtime = _require_vllm()
         self.decoder = decoder
         self.cache_dir = cache_dir
         self.model_path = local_model_path(decoder, cache_dir)
@@ -64,7 +89,7 @@ class MemoryVLLM:
         self.tokenizer = AutoTokenizer.from_pretrained(decoder, cache_dir=cache_dir, trust_remote_code=True)
         self.memory_token_id = prepare_tokenizer(self.tokenizer)
 
-        self.engine = LLM(
+        self.engine = runtime.LLM(
             model=self.model_path,
             download_dir=cache_dir,
             gpu_memory_utilization=gpu_memory_utilization,
@@ -101,6 +126,7 @@ class MemoryVLLM:
         Returns:
             The model, ready for ``answer``.
         """
+        _require_vllm()
         path = Path(checkpoint).expanduser()
         if not path.exists():
             patterns = [f"{subfolder}/*"] if subfolder else None
@@ -165,6 +191,7 @@ class MemoryVLLM:
         Returns:
             The generated texts.
         """
+        runtime = _require_vllm()
         input_ids = input_ids.to(self.device)
         attention_mask = attention_mask.to(self.device).bool()
         memory_tokens = self.memory(
@@ -175,7 +202,7 @@ class MemoryVLLM:
         inputs_embeds = inject_memory(self.embed_tokens(input_ids), memory_tokens, input_ids, self.memory_token_id)
 
         requests = [{"prompt_embeds": row[mask]} for row, mask in zip(inputs_embeds, attention_mask, strict=True)]
-        sampling = SamplingParams(max_tokens=max_new_tokens, temperature=temperature, top_p=top_p)
+        sampling = runtime.SamplingParams(max_tokens=max_new_tokens, temperature=temperature, top_p=top_p)
         outputs = self.engine.generate(requests, sampling_params=sampling, use_tqdm=False)
         return [output.outputs[0].text for output in outputs]
 

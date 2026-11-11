@@ -34,5 +34,5 @@ jobs:
           uv pip install torch==2.7.0 --index-url https://download.pytorch.org/whl/cpu
           echo "vllm; sys_platform == 'never'" > "$RUNNER_TEMP/no-vllm.txt"
           uv pip install -e ".[dev]" --override "$RUNNER_TEMP/no-vllm.txt"
-          python -m nltk.downloader -q wordnet punkt
+          python -m nltk.downloader -q wordnet
       - run: pytest -ra

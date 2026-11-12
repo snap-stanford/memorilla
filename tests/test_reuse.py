@@ -22,13 +22,13 @@ def model(fake_encoder: FakeEncoder, monkeypatch: pytest.MonkeyPatch) -> Any:
 
 
 def test_encode_documents_returns_reusable_cpu_vectors(model: Any, fake_encoder: FakeEncoder) -> None:
-    """Encoding uses the existing helper, including its first-document probe."""
+    """Encoding uses the existing helper, without a separate first-document probe."""
     vectors = model.encode_documents(DOCUMENTS)
     expected = torch.from_numpy(np.stack([fake_encoder.vector(text) for text in DOCUMENTS])).to(torch.float16)
     assert vectors.shape == (len(DOCUMENTS), EMBEDDING_DIM)
     assert vectors.device.type == "cpu" and vectors.dtype == torch.float16
     assert torch.equal(vectors, expected)
-    assert fake_encoder.calls == [[DOCUMENTS[0]], DOCUMENTS]
+    assert fake_encoder.calls == [DOCUMENTS]
 
 
 def test_questions_reuse_documents_and_recompute_memory(model: Any, fake_encoder: FakeEncoder) -> None:
@@ -45,7 +45,7 @@ def test_questions_reuse_documents_and_recompute_memory(model: Any, fake_encoder
     finally:
         hook.remove()
 
-    assert fake_encoder.calls == [[questions[0]], [questions[0]], [questions[1]], [questions[1]]]
+    assert fake_encoder.calls == [[questions[0]], [questions[1]]]
     assert len(seen) == len(questions)
     for (documents, padding, query), question in zip(seen, questions, strict=True):
         assert torch.equal(documents, vectors[None].to(torch.bfloat16))
@@ -60,7 +60,7 @@ def test_current_collection_reaches_memory_after_updates(model: Any, fake_encode
     """Append, replacement and removal use supplied rows, without re-encoding old documents."""
     original = model.encode_documents(DOCUMENTS)
     added = model.encode_documents(["shakespeare wrote hamlet"])
-    assert fake_encoder.calls == [[DOCUMENTS[0]], DOCUMENTS, ["shakespeare wrote hamlet"], ["shakespeare wrote hamlet"]]
+    assert fake_encoder.calls == [DOCUMENTS, ["shakespeare wrote hamlet"]]
     appended = torch.cat([original, added])
     replaced = torch.cat([added, original[1:]])
     removed = appended[1:]
@@ -74,7 +74,7 @@ def test_current_collection_reaches_memory_after_updates(model: Any, fake_encode
         hook.remove()
     for actual, expected in zip(seen, (appended, replaced, removed, original), strict=True):
         assert torch.equal(actual, expected[None].to(torch.bfloat16))
-    assert fake_encoder.calls == [[QUESTION]] * 8
+    assert fake_encoder.calls == [[QUESTION]] * 4
 
 
 def test_embedding_store_collection_is_accepted(model: Any, data_repo: Any) -> None:

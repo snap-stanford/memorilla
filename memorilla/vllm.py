@@ -1,14 +1,15 @@
 """Inference-time wrapper: a frozen vLLM decoder fed prompt embeddings that carry memory tokens."""
 
+from importlib import import_module
 from pathlib import Path
-from typing import Any
+from types import ModuleType
+from typing import TYPE_CHECKING, Any
 
 from huggingface_hub import snapshot_download
 from safetensors import safe_open
 import torch
 import torch.nn as nn
 from transformers import AutoTokenizer
-from vllm import LLM, SamplingParams
 
 from memorilla.data import DEFAULT_SYSTEM_PROMPT, apply_chat_template, build_messages
 from memorilla.embeddings import embed_texts, load_encoder
@@ -17,9 +18,32 @@ from memorilla.memory import MemoryModule
 from memorilla.paths import DEFAULT_DECODER, DEFAULT_ENCODER
 from memorilla.utils import local_model_path, prepare_tokenizer
 
+if TYPE_CHECKING:
+    from vllm import LLM
+
 EMBEDDING_WEIGHT_KEYS = ("model.embed_tokens.weight", "embed_tokens.weight", "transformer.wte.weight")
 DECODER_GPU_MEMORY_UTILIZATION = 0.6
 SHARED_ENCODER_GPU_MEMORY_UTILIZATION = 0.25  # the encoder's share when it runs next to the decoder
+
+
+def _require_vllm() -> ModuleType:
+    """Load the runtime only when inference is requested.
+
+    Returns:
+        The vLLM module.
+
+    Raises:
+        ImportError: If vLLM is not installed.
+    """
+    try:
+        return import_module("vllm")
+    except ModuleNotFoundError as error:
+        if error.name != "vllm":
+            raise
+        raise ImportError(
+            "MemoryVLLM inference requires vLLM; install the project dependencies with "
+            "`uv pip install -e .` on a supported CUDA system."
+        ) from error
 
 
 class MemoryVLLM:
@@ -28,7 +52,8 @@ class MemoryVLLM:
     vLLM serves the decoder with prompt embeddings enabled. A standalone copy of the decoder's input embedding matrix
     turns token ids into embeddings, the memory tokens are scattered into the ``<|memory|>`` positions, and each
     row's left padding is removed before the request is sent. ``from_pretrained`` and ``answer`` cover the common
-    case of answering one question from raw document texts.
+    case of answering one question from raw document texts. ``encode_documents`` and ``answer_from_embeddings``
+    reuse a document collection across questions.
     """
 
     def __init__(
@@ -40,7 +65,7 @@ class MemoryVLLM:
         cache_dir: str | None = None,
         tensor_parallel_size: int = 1,
         device: str = "cuda",
-        encoder: LLM | None = None,
+        encoder: "LLM | None" = None,
     ) -> None:
         """Start the vLLM engine and load the embedding matrix.
 
@@ -52,8 +77,9 @@ class MemoryVLLM:
             cache_dir: Model cache directory (None uses the Hugging Face default).
             tensor_parallel_size: Number of GPUs for tensor parallelism.
             device: Device for the memory module and the embedding matrix.
-            encoder: Embedding engine from ``load_encoder``; only ``answer`` needs it.
+            encoder: Embedding engine from ``load_encoder``; needed when encoding document or question texts.
         """
+        runtime = _require_vllm()
         self.decoder = decoder
         self.cache_dir = cache_dir
         self.model_path = local_model_path(decoder, cache_dir)
@@ -64,7 +90,7 @@ class MemoryVLLM:
         self.tokenizer = AutoTokenizer.from_pretrained(decoder, cache_dir=cache_dir, trust_remote_code=True)
         self.memory_token_id = prepare_tokenizer(self.tokenizer)
 
-        self.engine = LLM(
+        self.engine = runtime.LLM(
             model=self.model_path,
             download_dir=cache_dir,
             gpu_memory_utilization=gpu_memory_utilization,
@@ -101,6 +127,7 @@ class MemoryVLLM:
         Returns:
             The model, ready for ``answer``.
         """
+        _require_vllm()
         path = Path(checkpoint).expanduser()
         if not path.exists():
             patterns = [f"{subfolder}/*"] if subfolder else None
@@ -165,6 +192,7 @@ class MemoryVLLM:
         Returns:
             The generated texts.
         """
+        runtime = _require_vllm()
         input_ids = input_ids.to(self.device)
         attention_mask = attention_mask.to(self.device).bool()
         memory_tokens = self.memory(
@@ -175,7 +203,7 @@ class MemoryVLLM:
         inputs_embeds = inject_memory(self.embed_tokens(input_ids), memory_tokens, input_ids, self.memory_token_id)
 
         requests = [{"prompt_embeds": row[mask]} for row, mask in zip(inputs_embeds, attention_mask, strict=True)]
-        sampling = SamplingParams(max_tokens=max_new_tokens, temperature=temperature, top_p=top_p)
+        sampling = runtime.SamplingParams(max_tokens=max_new_tokens, temperature=temperature, top_p=top_p)
         outputs = self.engine.generate(requests, sampling_params=sampling, use_tqdm=False)
         return [output.outputs[0].text for output in outputs]
 
@@ -206,15 +234,101 @@ class MemoryVLLM:
         if self.encoder is None:
             raise ValueError("answer() needs an encoder; load the model with from_pretrained or pass encoder=.")
         embeddings = torch.from_numpy(embed_texts(self.encoder, [*documents, question]))  # one vector per text
+        return self._answer_from_vectors(question, embeddings[:-1], embeddings[-1:], system_prompt, max_new_tokens)
+
+    def encode_documents(self, documents: list[str]) -> torch.Tensor:
+        """Encode a collection once for reuse across questions.
+
+        Args:
+            documents: A nonempty list of document texts.
+
+        Returns:
+            Caller-owned CPU float16 embeddings ``[num_docs, embedding_dim]``. No texts or vectors are cached.
+
+        Raises:
+            TypeError: If ``documents`` is not a list of strings.
+            ValueError: If the collection is empty, the encoder is absent, or its embedding width is incompatible.
+        """
+        if not isinstance(documents, list) or any(not isinstance(document, str) for document in documents):
+            raise TypeError("documents must be a list of strings.")
+        if not documents:
+            raise ValueError("encode_documents() needs at least one document.")
+        if self.encoder is None:
+            raise ValueError(
+                "encode_documents() needs an encoder; load the model with from_pretrained or pass encoder=."
+            )
+        embeddings = torch.from_numpy(embed_texts(self.encoder, documents))
+        self._validate_document_embeddings(embeddings)
+        return embeddings
+
+    def answer_from_embeddings(
+        self,
+        question: str,
+        document_embeddings: torch.Tensor,
+        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+        max_new_tokens: int = 256,
+    ) -> str:
+        """Answer using a caller-owned collection, encoding only the current question.
+
+        Documents must use the same encoder and preprocessing as the question. Memory tokens are recomputed for
+        every question from the supplied collection; no collection or previous readout is retained.
+
+        Args:
+            question: The question.
+            document_embeddings: Nonempty floating tensor ``[num_docs, embedding_dim]``, such as the result of
+                ``encode_documents`` or ``EmbeddingStore.documents``. ``generate`` handles device and dtype conversion.
+            system_prompt: System prompt; the memory placeholder is appended to it.
+            max_new_tokens: Maximum number of generated tokens.
+
+        Returns:
+            The answer without surrounding whitespace.
+
+        Raises:
+            TypeError: If the collection is not a floating tensor.
+            ValueError: If its shape is invalid or the model has no encoder.
+        """
+        self._validate_document_embeddings(document_embeddings)
+        if self.encoder is None:
+            raise ValueError(
+                "answer_from_embeddings() needs an encoder for the question; "
+                "load the model with from_pretrained or pass encoder=."
+            )
+        question_embeddings = torch.from_numpy(embed_texts(self.encoder, [question]))
+        if question_embeddings.shape != (1, self.memory.config.embedding_dim):
+            raise ValueError("Question embedding width must match the memory module's embedding_dim.")
+        return self._answer_from_vectors(
+            question, document_embeddings, question_embeddings, system_prompt, max_new_tokens
+        )
+
+    def _validate_document_embeddings(self, embeddings: torch.Tensor) -> None:
+        """Check a reusable collection before encoding a question or running the memory module."""
+        if not isinstance(embeddings, torch.Tensor) or not embeddings.is_floating_point():
+            raise TypeError("document_embeddings must be a floating torch.Tensor.")
+        if embeddings.ndim != 2 or embeddings.shape[0] == 0:
+            raise ValueError(
+                "document_embeddings must have shape [num_docs, embedding_dim] with at least one document."
+            )
+        if embeddings.shape[1] != self.memory.config.embedding_dim:
+            raise ValueError("Document embedding width must match the memory module's embedding_dim.")
+
+    def _answer_from_vectors(
+        self,
+        question: str,
+        document_embeddings: torch.Tensor,
+        question_embeddings: torch.Tensor,
+        system_prompt: str,
+        max_new_tokens: int,
+    ) -> str:
+        """Build one prompt and generate from document and question vectors."""
         messages = build_messages(question, system_prompt, num_memories=self.memory.num_memories)
         prompt = apply_chat_template(self.tokenizer, messages, add_generation_prompt=True)
         inputs = self.tokenizer(prompt, return_tensors="pt")
         (answer,) = self.generate(
             inputs["input_ids"],
             inputs["attention_mask"],
-            doc_embeds=embeddings[None, :-1],
-            doc_padding_mask=torch.zeros(1, len(documents), dtype=torch.bool),
-            question_embeds=embeddings[-1:],
+            doc_embeds=document_embeddings[None],
+            doc_padding_mask=torch.zeros(1, len(document_embeddings), dtype=torch.bool),
+            question_embeds=question_embeddings,
             max_new_tokens=max_new_tokens,
         )
         return answer.strip()

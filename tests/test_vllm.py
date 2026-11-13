@@ -1,4 +1,4 @@
-"""Tests for ``MemoryVLLM.from_pretrained`` and ``answer`` with fake engines; they run wherever vLLM is installed."""
+"""CPU tests for ``MemoryVLLM.from_pretrained`` and ``answer`` with fake engines, without vLLM."""
 
 import importlib
 from pathlib import Path
@@ -52,14 +52,18 @@ class FakeEngine:
 
 
 @pytest.fixture
-def vllm_module() -> ModuleType:
-    """Import ``memorilla.vllm``, skipping the test where vLLM is not installed.
+def vllm_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    """Import the wrapper and replace only its runtime loader for fake-engine tests.
+
+    Args:
+        monkeypatch: Restores the loader after each test.
 
     Returns:
         The module.
     """
-    pytest.importorskip("vllm")
-    return importlib.import_module("memorilla.vllm")
+    module = importlib.import_module("memorilla.vllm")
+    monkeypatch.setattr(module, "_require_vllm", lambda: SimpleNamespace(SamplingParams=SimpleNamespace))
+    return module
 
 
 def make_memory() -> MemoryModule:
@@ -114,6 +118,7 @@ def test_answer_fills_the_memory_positions(vllm_module: ModuleType, fake_encoder
     assert request["prompt_embeds"].shape == (len(input_ids), HIDDEN_SIZE)
     assert torch.equal(request["prompt_embeds"][input_ids == model.memory_token_id], memory_tokens[0])
     assert model.engine.sampling.max_tokens == 8 and model.engine.sampling.temperature == 0.0
+    assert model.engine.sampling.top_p == 1.0
 
 
 def test_answer_needs_an_encoder(vllm_module: ModuleType) -> None:
@@ -138,3 +143,38 @@ def test_from_pretrained_loads_a_local_subfolder(
     decoder, memory = built["args"]
     assert decoder == DEFAULT_DECODER and memory.num_memories == NUM_MEMORIES
     assert built["encoder"] == f"engine for {DEFAULT_ENCODER}" and built["max_model_len"] == 4096
+
+
+@pytest.mark.parametrize("entrypoint", ["constructor", "from_pretrained"])
+def test_starting_inference_needs_vllm(entrypoint: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing runtime gives an installation hint before loading or downloading models."""
+    module = importlib.import_module("memorilla.vllm")
+
+    def missing_runtime(name: str) -> ModuleType:
+        assert name == "vllm"
+        raise ModuleNotFoundError("No module named 'vllm'", name="vllm")
+
+    monkeypatch.setattr(module, "import_module", missing_runtime)
+    monkeypatch.setattr(module, "local_model_path", lambda *args, **kwargs: pytest.fail("unexpected model lookup"))
+    monkeypatch.setattr(module, "snapshot_download", lambda **kwargs: pytest.fail("unexpected download"))
+    monkeypatch.setattr(module, "load_encoder", lambda *args, **kwargs: pytest.fail("unexpected encoder load"))
+    with pytest.raises(ImportError, match="requires vLLM.*uv pip install"):
+        if entrypoint == "constructor":
+            module.MemoryVLLM(DEFAULT_DECODER, make_memory())
+        else:
+            module.MemoryVLLM.from_pretrained("example/memory")
+
+
+def test_missing_runtime_dependency_is_not_misreported(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A broken vLLM installation retains the original missing dependency error."""
+    module = importlib.import_module("memorilla.vllm")
+    error = ModuleNotFoundError("No module named 'runtime_dependency'", name="runtime_dependency")
+
+    def broken_runtime(name: str) -> ModuleType:
+        assert name == "vllm"
+        raise error
+
+    monkeypatch.setattr(module, "import_module", broken_runtime)
+    with pytest.raises(ModuleNotFoundError) as caught:
+        module._require_vllm()
+    assert caught.value is error

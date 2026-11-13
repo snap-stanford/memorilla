@@ -131,6 +131,5 @@ def test_module_imports_without_gpu(module: str) -> None:
 
 @pytest.mark.parametrize("module", INFERENCE_MODULES)
 def test_inference_modules_import_without_gpu(module: str) -> None:
-    """The vLLM-backed modules import on a CPU-only machine wherever vLLM is installed."""
-    pytest.importorskip("vllm")
+    """The inference entry points import without a GPU or an installed vLLM runtime."""
     importlib.import_module(module)

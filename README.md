@@ -113,6 +113,36 @@ prompt slows the model down from 0.75 to **19.9 seconds, 27x slower**.
 
 The other checkpoints listed under [Checkpoints](#checkpoints) load the same way.
 
+### Reuse a collection across questions
+
+`answer()` encodes the documents on every call. For repeated questions, keep the document embeddings yourself and
+pass the current collection to `answer_from_embeddings()`. Using the model and row above:
+
+```python
+import torch
+
+documents = model.encode_documents(row["documents"])
+first = model.answer_from_embeddings(row["question"], documents, system_prompt=PERSONA_PROMPT)
+second = model.answer_from_embeddings("What breakfast options should I consider?", documents, system_prompt=PERSONA_PROMPT)
+
+# Encode only new documents, then explicitly supply the updated collection.
+added = model.encode_documents(["I prefer savory breakfasts."])
+documents = torch.cat([documents, added], dim=0)
+updated = model.answer_from_embeddings(row["question"], documents, system_prompt=PERSONA_PROMPT)
+
+# Remove the last document from future calls, or replace a row with a newly encoded document.
+documents = documents[:-1]
+documents[0] = model.encode_documents(["I now prefer oatmeal for breakfast."])[0]
+```
+
+`encode_documents()` returns a nonempty CPU float16 tensor `[num_docs, embedding_dim]`. Compatible tensors from
+`EmbeddingStore.documents()` can also be passed directly. Use the same encoder and preprocessing for stored
+documents and questions; shape checks cannot establish that compatibility. The caller owns the vectors and decides
+what to retain, append, replace, or remove. No raw texts, collection cache, or previous memory tokens are retained by
+these methods. Each answer still encodes its question and recomputes query-dependent memory tokens from the supplied
+collection. Removing a row removes it from that collection; it does not guarantee factual forgetting in generated
+answers or constitute machine unlearning.
+
 ## Training and Evaluation
 
 The recipes below train the memory module from scratch, and evaluates it on benchmarks. The data and its precomputed embeddings are downloaded from

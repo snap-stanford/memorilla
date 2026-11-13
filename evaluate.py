@@ -35,7 +35,7 @@ from memorilla.memory import MemoryModule
 from memorilla.metrics import SCORER_GPU_MEMORY_UTILIZATION, check_scoring_inputs, clean_generation, score_predictions
 from memorilla.paths import DATA_DIR, DATA_REPO, DEFAULT_DECODER, DEFAULT_ENCODER, MODEL_CACHE_DIR, RESULTS_DIR, resolve
 from memorilla.utils import DEFAULT_SEED, read_recipe, release_gpu_memory, seed_everything
-from memorilla.vllm import DECODER_GPU_MEMORY_UTILIZATION, MemoryVLLM
+from memorilla.vllm import CACHE_DTYPES, DECODER_GPU_MEMORY_UTILIZATION, MemoryVLLM
 
 CUSTOM_MAX_LENGTH = 2048
 CUSTOM_MAX_NEW_TOKENS = 128
@@ -73,6 +73,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_new_tokens", type=int, default=None, help="Override the generation budget.")
 
     parser.add_argument("--batch_size", type=int, default=32, help="Rows per generation call.")
+    parser.add_argument(
+        "--memory_cache", action="store_true", help="Cache the memory module's keys and values per collection."
+    )
+    parser.add_argument("--cache_dtype", choices=sorted(CACHE_DTYPES), default="bfloat16", help="Dtype of the cache.")
+    parser.add_argument("--compile_memory", action="store_true", help="Run the memory module through torch.compile.")
     parser.add_argument(
         "--gpu_memory_utilization",
         type=float,
@@ -227,6 +232,9 @@ def main(args: argparse.Namespace) -> None:
         max_model_len=max(benchmark.max_length for benchmark, _, _ in targets),
         gpu_memory_utilization=args.gpu_memory_utilization,
         cache_dir=args.cache_dir,
+        memory_cache=args.memory_cache,
+        cache_dtype=args.cache_dtype,
+        compile_memory=args.compile_memory,
     )
     output_dir = resolve(args.output_dir)
     jobs = []

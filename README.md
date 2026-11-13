@@ -216,7 +216,7 @@ goal.
 | [Evaluation](docs/evaluation.md) | Benchmarks, metrics, outputs, and the closed-book, RAG and full-context baselines |
 | [PersonalizationV4](personalizationv4/README.md) | Task and scoring, data format, generation pipeline, regeneration, license |
 | [Reinforcement learning](rl/README.md) | TextWorld setup, installation, data, training and evaluation |
-| [Profiling](profiling/README.md) | Memory module latency and GPU memory, caching and execution settings, results on B200 and A100 |
+| [Profiling](profiling/README.md) | Memory cache for inference, latency and GPU memory of the memory module, results on B200 and A100 |
 | [Troubleshooting](docs/troubleshooting.md) | Multi-GPU stalls, slow evaluation, offline machines |
 
 ## Development

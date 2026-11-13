@@ -72,12 +72,13 @@ def make_memory() -> MemoryModule:
     return MemoryModule(EMBEDDING_DIM, HIDDEN_SIZE, num_memories=NUM_MEMORIES, num_heads=2, dropout=0.0).eval()
 
 
-def make_model(vllm_module: ModuleType, encoder: FakeEncoder | None) -> Any:
+def make_model(vllm_module: ModuleType, encoder: FakeEncoder | None, **memory_options: Any) -> Any:
     """Assemble a ``MemoryVLLM`` on CPU around fake engines, without starting vLLM.
 
     Args:
         vllm_module: The ``memorilla.vllm`` module.
         encoder: Embedding engine, or None.
+        **memory_options: Arguments of ``set_memory_options``.
 
     Returns:
         The model.
@@ -93,7 +94,16 @@ def make_model(vllm_module: ModuleType, encoder: FakeEncoder | None) -> Any:
     )
     model.engine = FakeEngine(" paris \n")
     model.encoder = encoder
+    model.set_memory_options(**memory_options)
     return model
+
+
+def sent_memory_tokens(model: Any) -> torch.Tensor:
+    """Return the memory tokens of the last request the decoder received."""
+    messages = build_messages(QUESTION, DEFAULT_SYSTEM_PROMPT, num_memories=NUM_MEMORIES)
+    prompt = apply_chat_template(model.tokenizer, messages, add_generation_prompt=True)
+    input_ids = model.tokenizer(prompt, return_tensors="pt")["input_ids"][0]
+    return model.engine.requests[-1]["prompt_embeds"][input_ids == model.memory_token_id]
 
 
 def test_answer_fills_the_memory_positions(vllm_module: ModuleType, fake_encoder: FakeEncoder) -> None:
@@ -138,3 +148,40 @@ def test_from_pretrained_loads_a_local_subfolder(
     decoder, memory = built["args"]
     assert decoder == DEFAULT_DECODER and memory.num_memories == NUM_MEMORIES
     assert built["encoder"] == f"engine for {DEFAULT_ENCODER}" and built["max_model_len"] == 4096
+
+
+def test_written_collection_answers_like_documents(vllm_module: ModuleType, fake_encoder: FakeEncoder) -> None:
+    """A collection from ``write`` gives the same memory tokens as answering from the document texts."""
+    model = make_model(vllm_module, fake_encoder)
+    model.answer(QUESTION, DOCUMENTS)
+    direct = sent_memory_tokens(model)
+
+    start = len(fake_encoder.calls)
+    collection = model.write(DOCUMENTS)
+    assert model.answer(QUESTION, collection) == "paris"
+    calls = fake_encoder.calls[start:]  # the documents once, then the question alone
+    assert DOCUMENTS in calls and [QUESTION] in calls and [*DOCUMENTS, QUESTION] not in calls
+    assert torch.equal(sent_memory_tokens(model), direct)
+
+
+def test_memory_cache_matches_the_forward_pass(vllm_module: ModuleType, fake_encoder: FakeEncoder) -> None:
+    """With ``memory_cache`` the memory tokens match the forward pass up to bfloat16 rounding."""
+    model = make_model(vllm_module, fake_encoder)
+    model.answer(QUESTION, DOCUMENTS)
+    expected = sent_memory_tokens(model).float()
+
+    model.set_memory_options(memory_cache=True, cache_dtype="float32")
+    collection = model.write(DOCUMENTS)
+    assert collection.cache is not None and collection.doc_embeds is None
+    model.answer(QUESTION, collection)
+    torch.testing.assert_close(sent_memory_tokens(model).float(), expected, rtol=0.02, atol=0.02)
+
+
+def test_memory_options_are_checked(vllm_module: ModuleType) -> None:
+    """An unknown cache dtype, or caching a module that does not support it, is refused."""
+    with pytest.raises(ValueError, match="cache_dtype"):
+        make_model(vllm_module, None, cache_dtype="float8")
+    model = make_model(vllm_module, None)
+    model.memory = MemoryModule(EMBEDDING_DIM, HIDDEN_SIZE, num_memories=NUM_MEMORIES, num_heads=2, retrieval_init=True)
+    with pytest.raises(ValueError, match="memory_cache"):
+        model.set_memory_options(memory_cache=True)

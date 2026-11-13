@@ -8,7 +8,7 @@ import torch
 
 from memorilla.memory import MemoryModule
 from profiling import run, summarize
-from profiling.cached_memory import CachedMemory, Fp8CachedMemory, tensor_bytes
+from profiling.fp8_cache import Fp8Cache
 from profiling.timing import ResultLog, run_reps
 from profiling.timing import summarize as stats
 
@@ -18,39 +18,18 @@ def tiny_module(**options) -> MemoryModule:
     return MemoryModule(embedding_dim=16, output_dim=12, num_memories=4, num_heads=2, **options).eval()
 
 
-@pytest.mark.parametrize("write_chunk", [4, 64])
-@pytest.mark.parametrize("splits", [1, 2, 4])
-@pytest.mark.parametrize("shared", [False, True])
-def test_cached_memory_matches_the_module(splits: int, shared: bool, write_chunk: int) -> None:
-    module = tiny_module()
-    cached = CachedMemory(module, splits=splits, write_chunk=write_chunk)
-    docs, question = torch.randn(1 if shared else 3, 9, 16), torch.randn(3, 16)
-    cache = cached.write(docs)
-    padded = -(-9 // splits) * splits
-    # layers x collections x (N keys + padded N values) x dim x float32
-    assert tensor_bytes(cache) == 2 * docs.shape[0] * (9 + padded) * 16 * 4
-    expected = module(docs.expand(3, -1, -1), None, question)
-    torch.testing.assert_close(cached.read(cache, question), expected, rtol=1e-5, atol=1e-5)
-
-
 @pytest.mark.parametrize("shared", [False, True])
 def test_fp8_cache_is_close_to_the_module(shared: bool) -> None:
     module = tiny_module()
-    cached = Fp8CachedMemory(module, write_chunk=5)
+    fp8 = Fp8Cache(module, chunk_size=5)
     docs, question = torch.randn(1 if shared else 2, 21, 16), torch.randn(2, 16)
-    cache = cached.write(docs)
+    cache = fp8.write(docs)
     keys, key_scales, values, value_scales, num_docs = cache[0]
     assert keys.dtype == values.dtype == torch.float8_e4m3fn and num_docs == 21
     assert keys.shape[2] == values.shape[3] == 32  # documents padded to a multiple of 16
     expected = module(docs.expand(2, -1, -1), None, question)
-    got = cached.read(cache, question)
+    got = fp8.read(cache, question)
     assert ((got - expected).norm() / expected.norm()).item() < 0.05
-
-
-@pytest.mark.parametrize("options", [{"retrieval_init": True}, {"num_self_attn_layers": 1}])
-def test_cached_memory_rejects_question_dependent_document_work(options: dict) -> None:
-    with pytest.raises(ValueError, match="learned slots"):
-        CachedMemory(tiny_module(**options))
 
 
 def test_stats_and_first_call() -> None:
@@ -66,7 +45,7 @@ def test_stats_and_first_call() -> None:
 
 def test_sweep_resumes_and_skips_larger_n_after_oom(tmp_path: Path) -> None:
     log = ResultLog(tmp_path / "part.jsonl")
-    keys = run.grid({}, cache=["gpu", "kv"], mode=["eager"], shared=[0], splits=[1], batch=[1], n=[1, 2, 3])
+    keys = run.grid({}, cache=["gpu", "kv"], mode=["eager"], shared=[0], batch=[1], n=[1, 2, 3])
     ran = []
 
     def cell(key: dict) -> tuple[str, dict]:
@@ -89,25 +68,24 @@ def test_profile_and_summary_on_cpu(tmp_path: Path) -> None:
     run.main(
         ["--out", str(tmp_path), "--ns", "1,5", "--warmup", "1", "--reps", "2", "--device", "cpu", "--dtype", "float32"]
         + ["--embedding_dim", "16", "--output_dim", "12", "--num_memories", "4", "--batch_sizes", "1,2"]
-        + ["--shared", "0,1", "--splits", "1,2", "--modes", "eager,cuda_graph"]
+        + ["--shared", "0,1", "--modes", "eager,cuda_graph"]
     )
     records = {
-        tuple(r["key"][name] for name in ("cache", "mode", "shared", "splits", "batch", "n")): r
+        tuple(r["key"][name] for name in ("cache", "mode", "shared", "batch", "n")): r
         for r in map(json.loads, (tmp_path / run.RESULTS_FILE).read_text().splitlines())
     }
-    # host runs eager only, splits apply to kv only, and shared needs a batch above 1
-    assert ("host", "cuda_graph", 0, 1, 1, 1) not in records and ("gpu", "eager", 0, 2, 1, 1) not in records
-    assert ("gpu", "eager", 1, 1, 1, 1) not in records
-    assert records[("gpu", "cuda_graph", 0, 1, 1, 1)]["status"] == "skipped"  # no GPU here
+    # host runs eager only, and shared needs a batch above 1
+    assert ("host", "cuda_graph", 0, 1, 1) not in records and ("gpu", "eager", 1, 1, 1) not in records
+    assert records[("gpu", "cuda_graph", 0, 1, 1)]["status"] == "skipped"  # no GPU here
     assert all(r["status"] == "ok" for key, r in records.items() if key[1] == "eager")
     # every exact variant matches the default forward pass; float8 is caught as outside tolerance in a float32 run
     checked = {key: r for key, r in records.items() if r["status"] == "ok"}
     assert all("within_tolerance" in r for r in checked.values())
     assert all(r["within_tolerance"] for key, r in checked.items() if key[0] != "kv_fp8")
-    assert records[("gpu", "eager", 0, 1, 2, 5)]["rel_diff_default"] == 0.0
-    fp8 = records[("kv_fp8", "eager", 1, 1, 2, 5)]
+    assert records[("gpu", "eager", 0, 2, 5)]["rel_diff_default"] == 0.0
+    fp8 = records[("kv_fp8", "eager", 1, 2, 5)]
     assert not fp8["within_tolerance"] and fp8["rel_error"] < 0.1
-    kv = records[("kv", "eager", 0, 1, 1, 5)]
+    kv = records[("kv", "eager", 0, 1, 5)]
     assert kv["timings"]["read"]["n"] == 2 and kv["achieved_gbs"] > 0 and "write" in kv
     assert kv["state_bytes"] == 2 * 2 * 5 * 16 * 4  # layers x (keys, values) x N x dim x float32
     assert (tmp_path / "memory_module.env.json").exists()
@@ -120,9 +98,8 @@ def test_profile_and_summary_on_cpu(tmp_path: Path) -> None:
 
 
 def test_meaningful_combinations() -> None:
-    base = {"cache": "kv", "mode": "eager", "shared": 0, "splits": 1, "batch": 1}
+    base = {"cache": "kv", "mode": "eager", "shared": 0, "batch": 1}
     assert run.meaningful(base)
-    assert not run.meaningful({**base, "cache": "gpu", "splits": 4})
     assert not run.meaningful({**base, "cache": "host", "mode": "compile"})
     assert not run.meaningful({**base, "shared": 1})
     assert run.meaningful({**base, "shared": 1, "batch": 8})
@@ -151,8 +128,8 @@ def test_output_check_tolerance_follows_the_default_error() -> None:
 def test_chunked_fp8_write_matches_one_chunk() -> None:
     module = tiny_module()
     docs = torch.randn(2, 21, 16)
-    whole = Fp8CachedMemory(module, write_chunk=64).write(docs)
-    chunked = Fp8CachedMemory(module, write_chunk=4).write(docs)
+    whole = Fp8Cache(module, chunk_size=64).write(docs)
+    chunked = Fp8Cache(module, chunk_size=4).write(docs)
     for layer_whole, layer_chunked in zip(whole, chunked, strict=True):
         keys, key_scales, values, value_scales, _ = layer_whole
         assert torch.equal(keys.float(), layer_chunked[0].float()) and torch.equal(

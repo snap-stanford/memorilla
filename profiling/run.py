@@ -17,9 +17,9 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from memorilla.memory import DEFAULT_NUM_CROSS_ATTN_LAYERS, DEFAULT_NUM_MEMORIES, MemoryModule
+from memorilla.memory import DEFAULT_NUM_CROSS_ATTN_LAYERS, DEFAULT_NUM_MEMORIES, MemoryCache, MemoryModule
 from memorilla.utils import DEFAULT_SEED, write_json
-from profiling.cached_memory import CachedMemory, Fp8CachedMemory, tensor_bytes
+from profiling.fp8_cache import Fp8Cache
 from profiling.timing import GpuTimer, ResultLog, environment, gpu_memory, reset_peak_memory, run_reps, summarize
 
 CACHES = ("gpu", "host", "kv", "kv_fp8")
@@ -72,7 +72,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cache", type=choice_list(CACHES), default=list(CACHES), help=f"From {','.join(CACHES)}.")
     parser.add_argument("--modes", type=choice_list(MODES), default=["eager"], help=f"From {','.join(MODES)}.")
     parser.add_argument("--shared", type=int_list, default=[0], help="0, 1 or 0,1: one collection for the batch.")
-    parser.add_argument("--splits", type=int_list, default=[1], help="Chunks of the weighted sum (kv only).")
     parser.add_argument("--warmup", type=int, default=10, help="Untimed calls per cell.")
     parser.add_argument("--reps", type=int, default=50, help="Timed calls per cell.")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -101,8 +100,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if set(args.shared) - {0, 1}:
         parser.error("--shared takes 0 and 1.")
-    if min(args.splits) < 1:
-        parser.error("--splits must be at least 1.")
     return args
 
 
@@ -114,8 +111,6 @@ def grid(fixed: dict[str, Any], **axes: Iterable[Any]) -> list[dict[str, Any]]:
 
 def meaningful(key: dict[str, Any]) -> bool:
     """Whether a combination of settings is worth a cell (no duplicates, no unsupported pairs)."""
-    if key["splits"] != 1 and key["cache"] != "kv":
-        return False
     if key["mode"] != "eager" and key["cache"] == "host":
         return False
     return not (key["shared"] and key["batch"] == 1)
@@ -162,7 +157,7 @@ def sweep(
         if "within_tolerance" in fields:
             verdict = "within" if fields["within_tolerance"] else "OUTSIDE"
             detail += f", diff vs default {fields['rel_diff_default']:.2e} ({verdict} {fields['tolerance']:.2e})"
-        settings = " ".join(f"{name}={key[name]}" for name in ("cache", "mode", "shared", "splits", "batch"))
+        settings = " ".join(f"{name}={key[name]}" for name in ("cache", "mode", "shared", "batch"))
         print(f"{settings} N={key['n']:,}: {status} {detail or fields.get('reason', '')}", flush=True)
 
 
@@ -231,15 +226,37 @@ class HostReader(ForwardReader):
         return super().read((host.to(mask.device, non_blocking=True), mask), question)
 
 
-def make_reader(cache: str, module: MemoryModule, splits: int) -> Any:
+class CacheReader:
+    """``kv``: the library's memory cache, ``MemoryModule.write_cache`` and ``read_cache``."""
+
+    def __init__(self, module: MemoryModule) -> None:
+        """Wrap the module."""
+        self.module = module
+
+    def write(self, docs: torch.Tensor) -> MemoryCache:
+        """Write the cache."""
+        return self.module.write_cache(docs)
+
+    def read(self, cache: MemoryCache, question: torch.Tensor) -> torch.Tensor:
+        """Read the memory tokens from the cache."""
+        return self.module.read_cache(cache, question)
+
+
+def make_reader(cache: str, module: MemoryModule) -> Any:
     """The reader of a ``--cache`` setting."""
-    if cache == "gpu":
-        return ForwardReader(module)
-    if cache == "host":
-        return HostReader(module)
-    if cache == "kv":
-        return CachedMemory(module, splits=splits)
-    return Fp8CachedMemory(module)
+    readers = {"gpu": ForwardReader, "host": HostReader, "kv": CacheReader, "kv_fp8": Fp8Cache}
+    return readers[cache](module)
+
+
+def state_bytes(state: Any) -> int:
+    """Bytes held by a stored collection or cache."""
+    if isinstance(state, MemoryCache):
+        return state.nbytes
+    if isinstance(state, torch.Tensor):
+        return state.numel() * state.element_size()
+    if isinstance(state, list | tuple):
+        return sum(state_bytes(item) for item in state)
+    return 0
 
 
 def executable(reader: Any, state: Any, question: torch.Tensor, mode: str) -> Callable[[], torch.Tensor]:
@@ -332,7 +349,7 @@ def main(argv: list[str] | None = None) -> None:
         collections = 1 if shared else batch
         docs = random_unit((collections, n, dim), generator, device, dtype)
         question = random_unit((batch, dim), generator, device, dtype)
-        reader = make_reader(cache, module, key["splits"])
+        reader = make_reader(cache, module)
         fields: dict[str, Any] = {}
         with torch.inference_mode():
             if cache.startswith("kv"):
@@ -359,12 +376,12 @@ def main(argv: list[str] | None = None) -> None:
                 del default, expected
             del docs, output
 
-        state_bytes = tensor_bytes(state)
+        stored = state_bytes(state)
         median_s = fields["timings"]["read"]["median_ms"] / 1000.0
         fields.update(
-            state_bytes=state_bytes,
+            state_bytes=stored,
             per_query_ms=fields["timings"]["read"]["median_ms"] / batch,
-            achieved_gbs=state_bytes / median_s / 1e9,
+            achieved_gbs=stored / median_s / 1e9,
             peak_bandwidth_gbs=peak,
         )
         return "ok", fields
@@ -386,7 +403,6 @@ def main(argv: list[str] | None = None) -> None:
         cache=args.cache,
         mode=args.modes,
         shared=args.shared,
-        splits=args.splits,
         batch=args.batch_sizes,
         n=args.ns,
     )

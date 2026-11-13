@@ -12,7 +12,7 @@ from typing import Any
 
 from profiling.run import RESULTS_FILE
 
-AXES = ("cache", "mode", "shared", "splits", "batch", "n")
+AXES = ("cache", "mode", "shared", "batch", "n")
 MIB = 2**20
 
 
@@ -95,7 +95,6 @@ def markdown(records: list[dict[str, Any]], rows: list[dict[str, Any]]) -> list[
         "cache",
         "mode",
         "shared",
-        "splits",
         "batch",
         "N",
         "status",

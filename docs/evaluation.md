@@ -40,6 +40,11 @@ memory fractions (`--gpu_memory_utilization` for the decoder, `--scorer_gpu_memo
 encoder) are set for an 80 GB card; raise them on smaller cards. bfloat16 numerics and vLLM batching make scores vary by
 a few tenths of a point between runs, and by up to about one point for long generations.
 
+`--memory_cache` computes the keys and values of the memory module's cross-attention layers once per collection, which
+pays off when a collection answers many questions, and `--compile_memory` runs the memory module through
+`torch.compile`. Both are off by default, and the memory tokens they produce match the default up to bfloat16 rounding
+(see [profiling/README.md](../profiling/README.md)). `--cache_dtype float32` stores the cache in float32.
+
 ## Baselines
 
 ```bash

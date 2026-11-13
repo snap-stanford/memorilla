@@ -207,3 +207,47 @@ def test_checkpoint_loads_strictly(path: Path) -> None:
         output = memory(docs, None, question)
     assert output.shape == (1, config.num_memories, config.output_dim)
     assert torch.isfinite(output.float()).all()
+
+
+@pytest.mark.parametrize("chunk_size", [4, 64])
+@pytest.mark.parametrize("shared", [False, True])
+@pytest.mark.parametrize("padded", [False, True])
+def test_memory_cache_matches_forward(shared: bool, padded: bool, chunk_size: int) -> None:
+    """``read_cache`` after ``write_cache`` equals ``forward``, with padding, a shared collection and chunked writes."""
+    torch.manual_seed(0)
+    module = MemoryModule(embedding_dim=16, output_dim=12, num_memories=4, num_heads=2).eval()
+    docs, questions = torch.randn(1 if shared else 3, 9, 16), torch.randn(3, 16)
+    mask = None
+    if padded:
+        mask = torch.zeros(docs.shape[:2], dtype=torch.bool)
+        mask[..., -3:] = True
+    cache = module.write_cache(docs, mask, chunk_size=chunk_size)
+    assert cache.num_collections == docs.size(0)
+    assert cache.nbytes == 2 * 2 * docs.size(0) * 9 * 16 * 4  # layers x (keys, values) x collections x N x dim x 4 B
+    expected = module(docs.expand(3, -1, -1), None if mask is None else mask.expand(3, -1), questions)
+    torch.testing.assert_close(module.read_cache(cache, questions), expected, rtol=1e-5, atol=1e-5)
+
+
+def test_memory_cache_dtype() -> None:
+    """The cache can be stored in another dtype than the module's."""
+    module = MemoryModule(embedding_dim=16, output_dim=12, num_memories=4, num_heads=2).eval().to(torch.bfloat16)
+    docs, question = torch.randn(1, 9, 16, dtype=torch.bfloat16), torch.randn(1, 16, dtype=torch.bfloat16)
+    cache = module.write_cache(docs, dtype=torch.float32)
+    assert cache.layers[0][0].dtype == torch.float32
+    assert module.read_cache(cache, question).dtype == torch.bfloat16
+
+
+@pytest.mark.parametrize("options", [{"retrieval_init": True}, {"num_self_attn_layers": 1}])
+def test_memory_cache_needs_learned_slots_without_self_attention(options: dict[str, Any]) -> None:
+    """Modules whose document work depends on the question cannot be cached."""
+    module = MemoryModule(embedding_dim=16, output_dim=12, num_memories=4, num_heads=2, **options).eval()
+    assert not module.supports_cache
+    with pytest.raises(ValueError, match="learned memory slots"):
+        module.write_cache(torch.randn(1, 5, 16))
+
+
+def test_memory_cache_rejects_mismatched_batches() -> None:
+    """A cache with several collections must have one per question."""
+    module = MemoryModule(embedding_dim=16, output_dim=12, num_memories=4, num_heads=2).eval()
+    with pytest.raises(ValueError, match="collections"):
+        module.read_cache(module.write_cache(torch.randn(2, 5, 16)), torch.randn(3, 16))

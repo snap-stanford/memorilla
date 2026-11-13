@@ -1,11 +1,7 @@
-"""Tables of a profiling run: ``python -m profiling.summarize <out>`` writes ``summary.md`` and ``summary.csv``.
+"""Write ``summary.md`` and ``summary.csv`` for a profiling run: ``python -m profiling.summarize <out>``.
 
-Each row is one cell: the median read time per call with its interquartile range in milliseconds, the median time
-per question (read time / batch size), the bandwidth a read achieves if it reads the stored collection or cache once
-and its share of the GPU's peak, the time to write the cache (``kv`` settings), memory in MiB (the stored collection
-or cache, and PyTorch's peak allocation from compilation or capture through the reads, above the allocation before them) and the output check:
-the relative difference from the default forward pass and whether it is within tolerance. The summary lists every
-checked cell outside tolerance, and cells that were not checked (batch x N above ``--check_max``) show no verdict.
+Each row is one cell, with its median read time, time per question, achieved bandwidth, write time, memory and
+output check. Cells outside tolerance are listed above the table.
 """
 
 import argparse
@@ -34,7 +30,7 @@ def load(out: Path) -> list[dict[str, Any]]:
 
 
 def row(record: dict[str, Any]) -> dict[str, Any]:
-    """One flat row of a cell."""
+    """Flatten one cell into a table row."""
     values: dict[str, Any] = {axis: record["key"][axis] for axis in AXES}
     values["status"] = record["status"]
     read = record.get("timings", {}).get("read")
@@ -67,7 +63,7 @@ def fmt(value: Any) -> str:
 
 
 def markdown(records: list[dict[str, Any]], rows: list[dict[str, Any]]) -> list[str]:
-    """The Markdown summary."""
+    """Render the Markdown summary."""
     first = records[0]
     env = first.get("env", {})
     settings = {name: value for name, value in first["key"].items() if name not in AXES}

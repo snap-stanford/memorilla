@@ -1,34 +1,7 @@
-"""Latency and GPU memory of the memory module: document and question embeddings in, memory tokens out.
+"""Time the memory module (embeddings in, memory tokens out) across N, caching settings and execution modes.
 
-Only ``MemoryModule`` is timed, on one device, for collections of N document embeddings and a batch of questions.
-The encoder and the decoder are not part of the measurement. The cost does not depend on the embedding values, so
-random unit-norm vectors (like encoder outputs) stand in for encoded documents and questions, and the module is
-randomly initialised with the released architecture unless ``--checkpoint`` is given.
-
-Sweep axes:
-
-- ``--cache``, where and in what form the collection is kept between queries:
-  ``gpu`` (embeddings on the GPU, a query is ``MemoryModule.forward``), ``host`` (embeddings in pinned host memory,
-  copied to the GPU by every query), ``kv`` (keys and values of the cross-attention layers computed at write time,
-  ``CachedMemory``) and ``kv_fp8`` (the same cache in float8, ``Fp8CachedMemory``, approximate).
-- ``--modes``, how a query is executed: ``eager``, ``cuda_graph`` (captured once, replayed per query) or
-  ``compile`` (``torch.compile``; the compile time lands in ``first_call``). ``host`` runs eager only.
-- ``--shared``: 0 gives every question of a batch its own collection; 1 answers the whole batch from one collection.
-- ``--splits``: chunks of the weighted sum over the documents (``kv`` only; 1 is a single product).
-- ``--batch_sizes`` and ``--ns``.
-
-Each call is timed with CUDA events after the L2 cache is overwritten, so a small collection is not served from a
-cache that a real query arriving after other work would not find. A cell runs ``--warmup`` untimed calls, then
-``--reps`` timed ones. Each cell also records the bytes of the stored collection or cache, the bandwidth a read
-achieves if it reads them once (bytes / median time), PyTorch's peak allocation from compilation or capture through
-the reads, above the allocation before them, and an output check for batch x N up to ``--check_max``. The check takes the output that the timed call
-returns (after compilation or graph capture) and compares it with the default forward pass (``MemoryModule.forward``
-in the run's dtype, eager, as ``MemoryVLLM`` serves it). A variant is within tolerance when it differs from the
-default by at most ``--tolerance_factor`` times the default's own error against a float32 forward pass.
-
-Results go to ``<out>/memory_module.jsonl``, one record per cell; a rerun skips the cells already there and retries
-cells that failed. After a cell runs out of memory, the larger N of the same settings are skipped.
-``python -m profiling.summarize <out>`` writes the tables.
+Inputs are random unit-norm embeddings, since the cost does not depend on their values. Each cell checks its output
+against the default forward pass, and results go to ``<out>/memory_module.jsonl``. See ``profiling/README.md``.
 """
 
 import argparse
@@ -159,15 +132,9 @@ def sweep(
     cell: Callable[[dict[str, Any]], tuple[str, dict[str, Any]]],
     context: dict[str, Any],
 ) -> None:
-    """Run every cell not yet in the log; after an out-of-memory cell, skip the larger N of the same settings.
+    """Run the cells missing from the log, skipping larger N after an out-of-memory cell.
 
-    A cell that raises another exception is recorded as ``error`` and the sweep goes on; a rerun retries it.
-
-    Args:
-        log: The results log.
-        keys: Cell settings, ordered with N ascending within each group of other settings.
-        cell: Runs one cell and returns its status and fields.
-        context: Fields recorded with every cell (environment and arguments).
+    Other exceptions are recorded as ``error`` and retried on the next run.
     """
     failed: set[str] = set()
     for key in keys:
@@ -200,7 +167,7 @@ def sweep(
 
 
 def load_memory(args: argparse.Namespace) -> MemoryModule:
-    """The memory module of ``--checkpoint``, or a randomly initialised one; latency does not depend on the weights."""
+    """Load ``--checkpoint``, or build a randomly initialised module."""
     if args.checkpoint is None:
         torch.manual_seed(args.seed)
         module = MemoryModule(
@@ -220,7 +187,7 @@ def load_memory(args: argparse.Namespace) -> MemoryModule:
 
 
 def random_unit(shape: tuple[int, ...], generator: torch.Generator, device: torch.device, dtype: torch.dtype):
-    """Random unit-norm vectors, like encoder outputs, built in chunks so that only the result is held in full."""
+    """Random unit-norm vectors, drawn in chunks to bound float32 memory."""
     values = torch.empty(shape, device=device, dtype=dtype)
     rows = values.view(-1, shape[-1])
     for start in range(0, rows.shape[0], RANDOM_CHUNK_ROWS):
@@ -231,18 +198,18 @@ def random_unit(shape: tuple[int, ...], generator: torch.Generator, device: torc
 
 
 class ForwardReader:
-    """The ``gpu`` setting: the stored embeddings go through ``MemoryModule.forward``."""
+    """``gpu``: embeddings on the device, read with ``MemoryModule.forward``."""
 
     def __init__(self, module: MemoryModule) -> None:
         """Wrap the module."""
         self.module = module
 
     def write(self, docs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Keep the embeddings and an all-false padding mask, as ``MemoryVLLM.answer`` passes it."""
+        """Keep the embeddings and an all-false padding mask, as ``MemoryVLLM.answer`` does."""
         return docs, torch.zeros(docs.shape[:2], dtype=torch.bool, device=docs.device)
 
     def read(self, state: tuple[torch.Tensor, torch.Tensor], question: torch.Tensor) -> torch.Tensor:
-        """Run the forward pass; one stored collection is broadcast to the whole batch."""
+        """Run the forward pass, broadcasting a shared collection over the batch."""
         docs, mask = state
         if docs.shape[0] != question.shape[0]:
             docs, mask = docs.expand(question.shape[0], -1, -1), mask.expand(question.shape[0], -1)
@@ -250,22 +217,22 @@ class ForwardReader:
 
 
 class HostReader(ForwardReader):
-    """The ``host`` setting: the embeddings live in pinned host memory and every query copies them to the GPU."""
+    """``host``: embeddings in pinned host memory, copied to the device on every read."""
 
     def write(self, docs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Move the embeddings to (pinned) host memory."""
+        """Move the embeddings to pinned host memory."""
         host = docs.cpu()
         host = host.pin_memory() if docs.is_cuda else host
         return host, torch.zeros(docs.shape[:2], dtype=torch.bool, device=docs.device)
 
     def read(self, state: tuple[torch.Tensor, torch.Tensor], question: torch.Tensor) -> torch.Tensor:
-        """Copy the embeddings to the device, then run the forward pass."""
+        """Copy the embeddings to the device and run the forward pass."""
         host, mask = state
         return super().read((host.to(mask.device, non_blocking=True), mask), question)
 
 
 def make_reader(cache: str, module: MemoryModule, splits: int) -> Any:
-    """The object whose ``write`` stores a collection and whose ``read`` answers a batch of questions."""
+    """The reader of a ``--cache`` setting."""
     if cache == "gpu":
         return ForwardReader(module)
     if cache == "host":
@@ -276,12 +243,11 @@ def make_reader(cache: str, module: MemoryModule, splits: int) -> Any:
 
 
 def executable(reader: Any, state: Any, question: torch.Tensor, mode: str) -> Callable[[], torch.Tensor]:
-    """A zero-argument call of ``reader.read(state, question)`` in the given execution mode; it returns the output."""
+    """Wrap ``reader.read(state, question)`` as a zero-argument call in the given execution mode."""
     if mode == "eager":
         return lambda: reader.read(state, question)
     if mode == "compile":
-        # Every cell compiles anew; without the reset, recompilations add up across cells, and past Dynamo's
-        # recompile limit later cells would silently run eager.
+        # Without a reset, recompilations accumulate across cells and later cells silently fall back to eager.
         torch._dynamo.reset()
         compiled = torch.compile(reader.read, dynamic=False)
         return lambda: compiled(state, question)
@@ -305,23 +271,10 @@ def executable(reader: Any, state: Any, question: torch.Tensor, mode: str) -> Ca
 def output_check(
     output: torch.Tensor, default: torch.Tensor, expected: torch.Tensor, factor: float, floor: float
 ) -> dict[str, Any]:
-    """Compare a variant's output with the default forward pass and with the float32 forward pass.
+    """Compare an output with the default forward pass (``default``) and the float32 forward pass (``expected``).
 
-    The default forward pass (``MemoryModule.forward`` in the run's dtype, eager, as ``MemoryVLLM`` serves it) has a
-    rounding error of its own against float32. A variant is within tolerance when it differs from the default
-    forward pass by at most ``factor`` times that error (and at least ``floor``, for float32 runs whose own error
-    is near zero). Two computations that each round like the default differ by about 1.4 times its error.
-
-    Args:
-        output: The variant's output, as its timed call returns it.
-        default: The default forward pass on the same inputs.
-        expected: The forward pass of a float32 copy of the module on the same inputs.
-        factor: Allowed difference from the default, in multiples of the default's own error.
-        floor: Smallest allowed relative difference.
-
-    Returns:
-        ``rel_error`` (variant vs float32), ``default_rel_error`` (default vs float32), ``rel_diff_default`` and
-        ``max_abs_diff_default`` (variant vs default), ``tolerance`` and ``within_tolerance``.
+    The output is within tolerance when its relative difference from ``default`` is at most ``factor`` times the
+    default's own error against float32, and at least ``floor``.
     """
     output, default = output.float(), default.float()
     default_error = ((default - expected).norm() / expected.norm()).item()
@@ -346,7 +299,7 @@ def peak_bandwidth(args: argparse.Namespace, device: torch.device) -> float | No
 
 
 def fp8_supported(device: torch.device) -> bool:
-    """Whether ``torch._scaled_mm`` with per-row scales runs here (Hopper or newer; emulated without a GPU)."""
+    """Whether float8 products with per-row scales run here (Hopper or newer, or emulated on the CPU)."""
     return device.type != "cuda" or torch.cuda.get_device_capability(device) >= (9, 0)
 
 
@@ -385,21 +338,19 @@ def main(argv: list[str] | None = None) -> None:
             if cache.startswith("kv"):
                 fields["write"] = summarize([timer(partial(reader.write, docs)) for _ in range(args.write_reps)])
             state = reader.write(docs)
-            # The peak counts from here, so it includes what compilation or graph capture allocates (a CUDA graph
-            # keeps its memory pool), but not the stored collection or cache, which is reported as state_bytes.
+            # The peak covers compilation or graph capture and the reads, not the stored state.
             baseline = reset_peak_memory()
             start = time.perf_counter()
             call = executable(reader, state, question, mode)
             output = call()
-            fields["setup_ms"] = (time.perf_counter() - start) * 1000.0  # includes the first call (compilation)
+            fields["setup_ms"] = (time.perf_counter() - start) * 1000.0
             assert output.shape == (batch, config.num_memories, config.output_dim), output.shape
             fields.update(
                 run_reps(lambda sink: sink.setdefault("read", []).append(timer(call)), args.warmup, args.reps)
             )
             fields["gpu_memory"] = gpu_memory(baseline)
 
-            # The output checked is the one the timed call returns (after compilation or graph capture); it is
-            # compared after timing, so the reference computations do not count towards the peak.
+            # Check the timed call's own output, after timing so the references do not count towards the peak.
             if reference is not None and batch * n <= args.check_max:
                 forward = ForwardReader(module)
                 default = forward.read(forward.write(docs), question)

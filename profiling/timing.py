@@ -19,32 +19,18 @@ PERCENTILES = (10, 25, 75, 90)
 
 
 class GpuTimer:
-    """Times a GPU-only function with CUDA events, flushing the L2 cache before every call.
+    """Time a function with CUDA events, overwriting the L2 cache before each call.
 
-    Without the flush, a small working set (e.g. 4,096 document embeddings, 20 MB) stays in L2 across repetitions,
-    which a real query arriving after other work would not find. On a machine without a GPU the timer falls back to
-    the wall clock and does not flush.
+    Falls back to the wall clock without a GPU.
     """
 
     def __init__(self, device: torch.device, flush_l2: bool = True) -> None:
-        """Allocate the flush buffer.
-
-        Args:
-            device: Device the timed function runs on.
-            flush_l2: Whether to overwrite the L2 cache before every call.
-        """
+        """Allocate the L2 flush buffer when ``flush_l2`` is set."""
         self.cuda = device.type == "cuda"
         self.flush = torch.empty(L2_FLUSH_BYTES, dtype=torch.uint8, device=device) if self.cuda and flush_l2 else None
 
     def __call__(self, fn: Callable[[], Any]) -> float:
-        """Run ``fn`` once.
-
-        Args:
-            fn: The function.
-
-        Returns:
-            Its time in milliseconds.
-        """
+        """Run ``fn`` once and return its time in milliseconds."""
         if not self.cuda:
             start = time.perf_counter()
             fn()
@@ -61,15 +47,7 @@ class GpuTimer:
 
 
 def summarize(values: list[float]) -> dict[str, Any]:
-    """Summary statistics of one timing.
-
-    Args:
-        values: Samples in milliseconds (or any unit; the keys keep the ``_ms`` suffix).
-
-    Returns:
-        Median, mean, standard deviation, minimum, maximum, the 10th/25th/75th/90th percentiles, the sample count and
-        the raw samples.
-    """
+    """Median, mean, standard deviation, extremes, percentiles and raw samples of one timing."""
     ordered = sorted(values)
     result: dict[str, Any] = {
         "median_ms": statistics.median(ordered),
@@ -86,18 +64,10 @@ def summarize(values: list[float]) -> dict[str, Any]:
 
 
 def run_reps(step: Callable[[dict[str, list[float]]], None], warmup: int, reps: int) -> dict[str, Any]:
-    """Call ``step(sink)`` for the warmup and the timed repetitions, then summarise every timing.
-
-    The first warmup call is also kept as ``first_call`` timings, which include one-off costs such as kernel
-    compilation and allocator growth.
-
-    Args:
-        step: Runs one repetition and appends its timings to ``sink``.
-        warmup: Untimed repetitions.
-        reps: Timed repetitions.
+    """Run ``step(sink)`` for ``warmup`` untimed and ``reps`` timed repetitions and summarise each timing.
 
     Returns:
-        ``{"timings": {name: stats}, "first_call": {name: ms}}``.
+        ``{"timings": {name: stats}, "first_call": {name: ms}}``, where ``first_call`` is the first warmup call.
     """
     first: dict[str, list[float]] = {}
     for rep in range(warmup):
@@ -112,11 +82,7 @@ def run_reps(step: Callable[[dict[str, list[float]]], None], warmup: int, reps: 
 
 
 def reset_peak_memory() -> int:
-    """Reset PyTorch's peak memory statistics.
-
-    Returns:
-        The bytes PyTorch has allocated now (0 without a GPU).
-    """
+    """Reset PyTorch's peak memory counter and return the bytes allocated now (0 without a GPU)."""
     if not torch.cuda.is_available():
         return 0
     torch.cuda.reset_peak_memory_stats()
@@ -124,14 +90,7 @@ def reset_peak_memory() -> int:
 
 
 def gpu_memory(baseline: int = 0) -> dict[str, Any]:
-    """Snapshot of PyTorch's GPU memory counters.
-
-    Args:
-        baseline: ``reset_peak_memory()``'s return value; the peak above it is reported as ``torch_peak_delta``.
-
-    Returns:
-        Byte counts (empty without a GPU).
-    """
+    """PyTorch's GPU memory counters, with the peak above ``baseline`` as ``torch_peak_delta``."""
     if not torch.cuda.is_available():
         return {}
     return {
@@ -150,11 +109,7 @@ def _command(args: list[str]) -> str | None:
 
 
 def environment() -> dict[str, Any]:
-    """Hardware, software versions and the code revision.
-
-    Returns:
-        The environment description.
-    """
+    """Hardware, package versions and git revision."""
     repo = Path(__file__).resolve().parent.parent
     info: dict[str, Any] = {
         "host": platform.node(),
@@ -173,18 +128,13 @@ def environment() -> dict[str, Any]:
 
 
 class ResultLog:
-    """Append-only JSON Lines log of cells, so that an interrupted sweep resumes where it stopped.
+    """Append-only JSON Lines log of cells, so that an interrupted sweep resumes.
 
-    Each record has a ``key`` (the cell's settings) and a ``status``: ``ok``, ``oom`` (out of GPU memory),
-    or ``skipped``.
+    Each record has a ``key`` (the cell's settings) and a ``status``: ``ok``, ``oom``, ``skipped`` or ``error``.
     """
 
     def __init__(self, path: str | Path) -> None:
-        """Open the log and read the keys it already holds.
-
-        Args:
-            path: The ``.jsonl`` file.
-        """
+        """Open the log and read the keys it already holds."""
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.done: dict[str, str] = {}
@@ -204,13 +154,7 @@ class ResultLog:
         return self.done.get(self.key_id(key))
 
     def write(self, key: dict[str, Any], status: str, **fields: Any) -> None:
-        """Append one cell.
-
-        Args:
-            key: The cell's settings.
-            status: ``ok``, ``oom`` or ``skipped``.
-            **fields: Timings, memory and anything else to record.
-        """
+        """Append one cell with its status and fields."""
         record = {"key": key, "status": status, **fields}
         with open(self.path, "a") as handle:
             handle.write(json.dumps(record) + "\n")

@@ -28,8 +28,8 @@ Each option takes a comma-separated list, and every combination is a cell.
 | `--batch_sizes`, `--ns` | | Questions per call and documents per collection |
 
 The defaults time `gpu`, `host`, `kv` and `kv_fp8` in eager mode at batch size 1. Combinations that would duplicate
-another cell or are not supported are left out: `host` runs eager only, and `--shared 1` needs a batch above 1. `--dtype`, `--num_memories` and `--num_cross_attn_layers` change the module, and
-`--help` lists every option.
+another cell or are not supported are left out: `host` runs eager only, and `--shared 1` needs a batch above 1.
+`--dtype`, `--num_memories` and `--num_cross_attn_layers` change the module, and `--help` lists every option.
 
 The `kv` cache is an exact rewrite of the forward pass (the tests check it in float32, with padding masks and shared
 collections). `kv_fp8` is not exact. Every cell checks its output against the default forward pass, as described
@@ -118,7 +118,7 @@ time per call in milliseconds over 50 calls.
 
 At 4,194,304 documents the A100 runs out of memory with `gpu` and `kv`. Float8 products with per-row scales need a
 Hopper or newer GPU, so the A100 has no `kv_fp8` cells. The A100 sweep ran before the cache moved from `profiling/`
-into `MemoryModule`; on the B200, the two implementations gave the same times within 0.02 ms.
+into `MemoryModule`; on the B200, the two implementations agreed within 5% in every cell.
 
 **64 questions per call, time per question on the B200.**
 
@@ -136,9 +136,9 @@ The main observations are as follows.
   against 5 GiB at one million documents), and writing it is a one-time cost when documents are added.
 - `torch.compile` on top of `kv` gives a further 1.6 times at large N (5.04 ms at one million documents on the B200,
   where the read reaches 53% of the peak memory bandwidth). CUDA graphs help only at small N, where kernel launches
-  dominate, and bring a query at N = 1 from 0.37 to 0.21 ms.
+  dominate, and bring a query at N = 1 from 0.36 to 0.21 ms.
 - When a batch of questions shares one collection, the `kv` cost per question falls by up to 3 times against one
-  question per call (0.71 against 2.27 ms at 262,144 documents). The forward pass gains nothing from sharing,
+  question per call (0.71 against 2.28 ms at 262,144 documents). The forward pass gains nothing from sharing,
   because it projects the documents again for every question.
 - `kv_fp8` halves the cache but is 4 to 6 times slower than `kv`, since it runs one float8 product per head and
   quantises the attention weights on every query. It is also outside tolerance in 20 of 25 checked cells (up to
@@ -146,8 +146,8 @@ The main observations are as follows.
 - Every exact variant (`gpu`, `host` and `kv`, in every mode, with or without sharing) is within tolerance of the
   default forward pass in all 55 checked cells on the B200, using at most 80% of the tolerance.
 
-**End-to-end evaluation.** `evaluate.py --benchmark factkg` with the Stage 3 checkpoint on the B200 gives the
-same accuracy with the cache, and more than 99% of the predictions are identical to the default.
+**End-to-end evaluation.** `evaluate.py --benchmark factkg` with the Stage 3 checkpoint on the B200 gives an
+accuracy within 0.06 points of the default with the cache, and more than 99% of the predictions are identical.
 
 | Options | Accuracy | Predictions identical to the default |
 |---|---|---|
@@ -174,7 +174,7 @@ to 4.7 times at 4,096 documents. On the B200, two runs on the same node agreed w
   `--peak_bandwidth_gbs`). For `host`, it is the copy rate from host memory instead.
 - Memory is reported as the bytes of the stored collection or cache, and PyTorch's peak allocation from compilation
   or graph capture through the reads, above the allocation before them. A CUDA graph's memory pool is included.
-- Results go to `results/profiling/memory_module.jsonl`, one record per cell with its settings, status, timings,
+- Results go to `<out>/memory_module.jsonl`, one record per cell with its settings, status, timings,
   memory, the environment (GPU, CUDA, torch, git commit) and the arguments. A rerun skips the cells already there and
   retries failed ones. A cell that runs out of memory is recorded as `oom`, and the larger N of the same settings are
   skipped.

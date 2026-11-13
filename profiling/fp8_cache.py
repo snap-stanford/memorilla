@@ -30,7 +30,7 @@ def quantize_rows(values: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 def scaled_mm(a: torch.Tensor, b: torch.Tensor, scale_a: torch.Tensor, scale_b: torch.Tensor) -> torch.Tensor:
     """``(a * scale_a) @ (b * scale_b.T).T`` in bfloat16 for float8 ``a [M, K]`` and ``b [N, K]``.
 
-    Uses ``torch._scaled_mm`` on a GPU and emulates it in float32 otherwise (for tests).
+    Uses ``torch._scaled_mm`` on a GPU and emulates it in float32 otherwise (for CPU runs).
     """
     if a.is_cuda:
         return torch._scaled_mm(a, b.t(), scale_a=scale_a, scale_b=scale_b, out_dtype=torch.bfloat16)

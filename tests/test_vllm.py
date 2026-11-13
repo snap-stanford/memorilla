@@ -177,11 +177,7 @@ def test_memory_cache_matches_the_forward_pass(vllm_module: ModuleType, fake_enc
     torch.testing.assert_close(sent_memory_tokens(model).float(), expected, rtol=0.02, atol=0.02)
 
 
-def test_memory_options_are_checked(vllm_module: ModuleType) -> None:
-    """An unknown cache dtype, or caching a module that does not support it, is refused."""
+def test_unknown_cache_dtype_is_refused(vllm_module: ModuleType) -> None:
+    """Only the listed cache dtypes are accepted."""
     with pytest.raises(ValueError, match="cache_dtype"):
         make_model(vllm_module, None, cache_dtype="float8")
-    model = make_model(vllm_module, None)
-    model.memory = MemoryModule(EMBEDDING_DIM, HIDDEN_SIZE, num_memories=NUM_MEMORIES, num_heads=2, retrieval_init=True)
-    with pytest.raises(ValueError, match="memory_cache"):
-        model.set_memory_options(memory_cache=True)

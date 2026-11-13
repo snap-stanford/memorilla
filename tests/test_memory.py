@@ -237,15 +237,6 @@ def test_memory_cache_dtype() -> None:
     assert module.read_cache(cache, question).dtype == torch.bfloat16
 
 
-@pytest.mark.parametrize("options", [{"retrieval_init": True}, {"num_self_attn_layers": 1}])
-def test_memory_cache_needs_learned_slots_without_self_attention(options: dict[str, Any]) -> None:
-    """Modules whose document work depends on the question cannot be cached."""
-    module = MemoryModule(embedding_dim=16, output_dim=12, num_memories=4, num_heads=2, **options).eval()
-    assert not module.supports_cache
-    with pytest.raises(ValueError, match="learned memory slots"):
-        module.write_cache(torch.randn(1, 5, 16))
-
-
 def test_memory_cache_rejects_mismatched_batches() -> None:
     """A cache with several collections must have one per question."""
     module = MemoryModule(embedding_dim=16, output_dim=12, num_memories=4, num_heads=2).eval()

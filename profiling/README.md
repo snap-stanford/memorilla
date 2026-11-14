@@ -1,9 +1,9 @@
 # Profiling
 
-This folder measures how the memory module scales with the number of documents N. It times one call of the module
-(document and question embeddings in, 16 memory tokens out) and reports its GPU memory, with and without the memory
-cache that `MemoryVLLM` uses when `memory_cache` is on. The encoder and the decoder are not timed, and no data is
-needed, because random embeddings cost the same as real ones.
+These scripts measure how the latency and GPU memory of the memory module grow with the number of documents N, with
+and without the memory cache that `MemoryVLLM` uses when `memory_cache` is on. Only the memory module is timed, from
+the document and question embeddings to the 16 memory tokens. No data is needed, since random embeddings cost the
+same as real ones.
 
 ## Running
 

@@ -52,6 +52,7 @@ class MemoryLLM(nn.Module):
         attn_implementation: str = "flash_attention_2",
         cache_dir: str | None = None,
         dtype: torch.dtype = torch.bfloat16,
+        trust_remote_code: bool = False,
     ) -> None:
         """Load the decoder and tokenizer.
 
@@ -61,6 +62,7 @@ class MemoryLLM(nn.Module):
             attn_implementation: Decoder attention implementation, e.g. ``flash_attention_2`` or ``sdpa``.
             cache_dir: Model cache directory (None uses the Hugging Face default).
             dtype: Decoder dtype.
+            trust_remote_code: Allow custom model code from the decoder's repository to run.
         """
         super().__init__()
         self.memory = memory
@@ -68,10 +70,12 @@ class MemoryLLM(nn.Module):
             decoder,
             cache_dir=cache_dir,
             torch_dtype=dtype,
-            trust_remote_code=True,
+            trust_remote_code=trust_remote_code,
             attn_implementation=attn_implementation,
         )
-        self.tokenizer = AutoTokenizer.from_pretrained(decoder, cache_dir=cache_dir, trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            decoder, cache_dir=cache_dir, trust_remote_code=trust_remote_code
+        )
         self.memory_token_id = prepare_tokenizer(self.tokenizer)
         self.text_model.resize_token_embeddings(len(self.tokenizer))
 

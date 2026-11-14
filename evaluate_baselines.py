@@ -88,6 +88,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top_k", type=int, default=5, help="Documents retrieved per question with --method rag.")
     parser.add_argument("--decoder", type=str, default=DEFAULT_DECODER, help="Decoder (Hub id or local path).")
     parser.add_argument(
+        "--trust_remote_code",
+        action="store_true",
+        help="Allow custom model code from the decoder's repository to run.",
+    )
+    parser.add_argument(
         "--encoder", type=str, default=DEFAULT_ENCODER, help="Encoder of the stored embeddings and of choice scoring."
     )
     parser.add_argument(
@@ -309,7 +314,7 @@ def start_engine(args: argparse.Namespace, max_model_len: int, yarn_factor: floa
         model=local_model_path(args.decoder, args.cache_dir),
         download_dir=args.cache_dir,
         dtype="bfloat16",
-        trust_remote_code=True,
+        trust_remote_code=args.trust_remote_code,
         max_model_len=max_model_len,
         gpu_memory_utilization=args.gpu_memory_utilization,
         **options,
@@ -359,7 +364,9 @@ def main(args: argparse.Namespace) -> None:
     """
     os.environ.setdefault(VLLM_MULTIPROC_VARIABLE, "spawn")
     seed_everything(args.seed)
-    tokenizer = AutoTokenizer.from_pretrained(args.decoder, cache_dir=args.cache_dir, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.decoder, cache_dir=args.cache_dir, trust_remote_code=args.trust_remote_code
+    )
     output_dir = resolve(args.output_dir) / method_label(args.method, args.top_k)
 
     windows: dict[tuple[int, float | None], list[PromptSet]] = defaultdict(list)

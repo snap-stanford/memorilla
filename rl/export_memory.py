@@ -3,6 +3,9 @@
 The policy state of a single-GPU SkyRL checkpoint (``global_step_N/policy/model_world_size_1_rank_0.pt``) holds the
 frozen decoder and every modality module. This keeps the memory module of one modality and writes ``memory.pt`` and
 ``config.json``, loadable with ``MemoryModule.from_pretrained`` and usable as an evaluation checkpoint.
+
+The policy state holds distributed tensors, so it is read with ``torch.load(..., weights_only=False)``, which can run
+code stored in the file. Use this script only on checkpoints from your own training runs.
 """
 
 import argparse

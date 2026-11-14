@@ -36,6 +36,7 @@ success rate on TextWorld games from 18.6% to 24.2%.
 - [Reinforcement learning on TextWorld](#reinforcement-learning-on-textworld)
 - [Documentation](#documentation)
 - [Development](#development)
+- [Security notes](#security-notes)
 - [Citation](#citation)
 - [License](#license)
 
@@ -260,6 +261,21 @@ $ pre-commit install                 # run the same checks on every commit
 ```
 
 Set `MEMORILLA_TEST_CHECKPOINTS` to a directory of checkpoints to also check that each one loads strictly and runs.
+
+## Security notes
+
+Memorilla loads models and checkpoints from the Hugging Face Hub and from local paths. Load only those you trust, and
+run untrusted ones in an isolated environment.
+
+- Custom model code from a decoder's repository runs only with `--trust_remote_code` (or `trust_remote_code=True` in
+  Python). The default Qwen3 models do not need it.
+- Memory checkpoints (`memory.pt`) are loaded with `torch.load(..., weights_only=True)`. `rl/export_memory.py` reads
+  SkyRL training checkpoints with `weights_only=False` and is meant for your own runs only.
+- The pinned versions of vLLM (0.9.1), transformers (4.53.3) and PyTorch (2.7.0) have public advisories about
+  crafted model configs and checkpoints ([GHSA-8fr4-5q9j-m8gm](https://github.com/advisories/GHSA-8fr4-5q9j-m8gm),
+  [GHSA-29pf-2h5f-8g72](https://github.com/advisories/GHSA-29pf-2h5f-8g72),
+  [GHSA-63cw-57p8-fm3p](https://github.com/advisories/GHSA-63cw-57p8-fm3p)). They apply only to untrusted models and
+  checkpoints.
 
 ## Citation
 

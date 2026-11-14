@@ -236,3 +236,24 @@ def test_check_scoring_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(LookupError):
         check_scoring_inputs(BENCHMARKS["lamp7"], Dataset.from_list(make_rows()))
     check_scoring_inputs(replace(BENCHMARKS["lamp7"], metrics=("rouge1",)), Dataset.from_list(make_rows()))
+
+
+@pytest.mark.parametrize(
+    ("scoring", "names"),
+    [(EXACT_MATCH, (EXACT_MATCH,)), (POLARITY, (ACCURACY,)), (GENERATION, GENERATION_METRICS)],
+)
+def test_compute_metrics_rejects_an_empty_split(scoring: str, names: tuple[str, ...]) -> None:
+    """An empty split raises one clear error instead of a ZeroDivisionError (BLEU) or NaN means."""
+    with pytest.raises(ValueError, match="no rows"):
+        compute_metrics(scoring, names, [], [])
+
+
+def test_write_metrics_writes_undefined_scores_as_null(tmp_path: Path) -> None:
+    """A NaN or infinite score is written as JSON null, so metrics.json stays strict JSON."""
+
+    def reject(constant: str) -> NoReturn:
+        raise ValueError(f"metrics.json holds {constant}")
+
+    summary = write_metrics(tmp_path, {"f1": float("nan"), "bleu1": float("inf"), ACCURACY: 0.5}, 3)
+    written = json.loads((tmp_path / METRICS_FILE).read_text(), parse_constant=reject)
+    assert written == summary == {"f1": None, "bleu1": None, ACCURACY: 50.0, "num_examples": 3}

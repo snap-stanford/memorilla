@@ -6,6 +6,7 @@ All metrics are returned as fractions in ``[0, 1]``; ``write_metrics`` reports t
 from collections.abc import Sequence
 from itertools import chain
 import json
+import math
 from pathlib import Path
 import re
 import string
@@ -433,10 +434,12 @@ def compute_metrics(
         The requested metrics as fractions, in the order of ``metrics``.
 
     Raises:
-        ValueError: If the scoring method is unknown, a metric does not belong to it, or ``choice`` scoring lacks
-            choices or an engine.
+        ValueError: If the scoring method is unknown, a metric does not belong to it, ``choice`` scoring lacks
+            choices or an engine, or there are no predictions.
     """
     validate_metrics(scoring, metrics)
+    if len(predictions) == 0:
+        raise ValueError("Cannot score an empty split: the split has no rows.")
 
     scores: dict[str, float] = {}
     if scoring == CHOICE:
@@ -567,6 +570,8 @@ def write_predictions(output_dir: str | Path, records: list[dict[str, Any]]) -> 
 def write_metrics(output_dir: str | Path, scores: dict[str, float], num_examples: int) -> dict[str, Any]:
     """Write ``metrics.json`` (percentages with two decimals and the number of examples).
 
+    A score that is not finite (NaN or infinite) is written as ``null``, so the file stays strict JSON.
+
     Args:
         output_dir: Output directory.
         scores: Metrics as fractions.
@@ -575,7 +580,9 @@ def write_metrics(output_dir: str | Path, scores: dict[str, float], num_examples
     Returns:
         The content written to ``metrics.json``.
     """
-    summary: dict[str, Any] = {name: round(100 * value, 2) for name, value in scores.items()}
+    summary: dict[str, Any] = {
+        name: round(100 * value, 2) if math.isfinite(value) else None for name, value in scores.items()
+    }
     summary["num_examples"] = num_examples
     write_json(Path(output_dir) / METRICS_FILE, summary)
     return summary

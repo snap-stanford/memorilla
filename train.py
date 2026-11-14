@@ -93,7 +93,10 @@ class MemoryTrainingModule(pl.LightningModule):
         self.strict_loading = False
 
         embedding_dim = AutoConfig.from_pretrained(args.encoder, cache_dir=args.cache_dir).hidden_size
-        output_dim = AutoConfig.from_pretrained(args.decoder, cache_dir=args.cache_dir).hidden_size
+        decoder_config = AutoConfig.from_pretrained(
+            args.decoder, cache_dir=args.cache_dir, trust_remote_code=args.trust_remote_code
+        )
+        output_dim = decoder_config.hidden_size
         self.memory = MemoryModule(
             embedding_dim=embedding_dim,
             output_dim=output_dim,
@@ -112,6 +115,7 @@ class MemoryTrainingModule(pl.LightningModule):
             self.memory,
             attn_implementation=args.attn_implementation,
             cache_dir=args.cache_dir,
+            trust_remote_code=args.trust_remote_code,
         )
         self.memory.to(dtype=torch.bfloat16).train()
         self.llm.text_model.requires_grad_(False).eval()
@@ -247,6 +251,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     model = parser.add_argument_group("model")
     model.add_argument("--decoder", type=str, default=DEFAULT_DECODER, help="Frozen decoder (Hub id or local path).")
+    model.add_argument(
+        "--trust_remote_code",
+        action="store_true",
+        help="Allow custom model code from the decoder's repository to run.",
+    )
     model.add_argument("--encoder", type=str, default=DEFAULT_ENCODER, help="Frozen encoder of the embeddings.")
     model.add_argument("--num_memories", type=int, default=DEFAULT_NUM_MEMORIES, help="Memory tokens per example.")
     model.add_argument("--num_heads", type=int, default=DEFAULT_NUM_HEADS, help="Attention heads of the memory module.")

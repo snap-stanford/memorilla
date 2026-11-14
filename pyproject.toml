@@ -20,7 +20,7 @@ dependencies = [
     "torch==2.7.0",
     "vllm==0.9.1",
     "transformers==4.53.3",
-    "lightning==2.6.1",
+    "lightning==2.6.6",
     "datasets==4.1.1",
     "safetensors>=0.5.3",
     "huggingface_hub>=0.36.0,<1.0",

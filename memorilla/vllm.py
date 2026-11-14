@@ -65,6 +65,7 @@ class MemoryVLLM:
         memory_cache: bool = False,
         cache_dtype: str = "bfloat16",
         compile_memory: bool = False,
+        trust_remote_code: bool = False,
     ) -> None:
         """Start the vLLM engine and load the embedding matrix.
 
@@ -80,6 +81,7 @@ class MemoryVLLM:
             memory_cache: See ``set_memory_options``.
             cache_dtype: See ``set_memory_options``.
             compile_memory: See ``set_memory_options``.
+            trust_remote_code: Allow custom model code from the decoder's repository to run.
         """
         self.decoder = decoder
         self.cache_dir = cache_dir
@@ -89,7 +91,9 @@ class MemoryVLLM:
         self.encoder = encoder
         self.set_memory_options(memory_cache, cache_dtype, compile_memory)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(decoder, cache_dir=cache_dir, trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            decoder, cache_dir=cache_dir, trust_remote_code=trust_remote_code
+        )
         self.memory_token_id = prepare_tokenizer(self.tokenizer)
 
         self.engine = LLM(
@@ -97,7 +101,7 @@ class MemoryVLLM:
             download_dir=cache_dir,
             gpu_memory_utilization=gpu_memory_utilization,
             enable_prompt_embeds=True,
-            trust_remote_code=True,
+            trust_remote_code=trust_remote_code,
             max_model_len=max_model_len,
             dtype="bfloat16",
             tensor_parallel_size=tensor_parallel_size,

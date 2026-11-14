@@ -59,6 +59,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=str, required=True, help="Checkpoint directory or memory.pt.")
     parser.add_argument("--decoder", type=str, default=DEFAULT_DECODER, help="Decoder the checkpoint was trained with.")
     parser.add_argument(
+        "--trust_remote_code",
+        action="store_true",
+        help="Allow custom model code from the decoder's repository to run.",
+    )
+    parser.add_argument(
         "--encoder", type=str, default=DEFAULT_ENCODER, help="Encoder of the stored embeddings and of choice scoring."
     )
     prompt = parser.add_mutually_exclusive_group()
@@ -219,7 +224,10 @@ def main(args: argparse.Namespace) -> None:
     targets = [load_target(benchmark, args) for benchmark in resolve_targets(args)]
 
     memory = MemoryModule.from_pretrained(resolve(args.checkpoint))
-    hidden_size = AutoConfig.from_pretrained(args.decoder, cache_dir=args.cache_dir).hidden_size
+    decoder_config = AutoConfig.from_pretrained(
+        args.decoder, cache_dir=args.cache_dir, trust_remote_code=args.trust_remote_code
+    )
+    hidden_size = decoder_config.hidden_size
     if memory.config.output_dim != hidden_size:
         raise ValueError(
             f"The checkpoint produces {memory.config.output_dim}-dimensional memory tokens but {args.decoder} has "
@@ -235,6 +243,7 @@ def main(args: argparse.Namespace) -> None:
         memory_cache=args.memory_cache,
         cache_dtype=args.cache_dtype,
         compile_memory=args.compile_memory,
+        trust_remote_code=args.trust_remote_code,
     )
     output_dir = resolve(args.output_dir)
     jobs = []

@@ -28,6 +28,7 @@ success rate on TextWorld games from 18.6% to 24.2%.
 
 - [Installation](#installation)
 - [Getting started](#getting-started)
+- [Efficiency](#efficiency)
 - [Training and Evaluation](#training-and-evaluation)
 - [Checkpoints](#checkpoints)
 - [Using your own data](#using-your-own-data)
@@ -112,6 +113,36 @@ movie scripts from NarrativeQA by **more than 4,000x**. On one H100, growing a c
 prompt slows the model down from 0.75 to **19.9 seconds, 27x slower**.
 
 The other checkpoints listed under [Checkpoints](#checkpoints) load the same way.
+
+## Efficiency
+
+The decoder always reads the same 16 memory tokens, so its cost does not depend on the number of documents. Only the
+memory module's cost grows with the collection. The figure shows it on one B200 GPU for up to four million documents,
+about one billion tokens at 250 tokens per document.
+
+<p align="center">
+  <img src="assets/efficiency.png" alt="Memory module latency and GPU memory for 1 to 4 million documents" width="100%" />
+</p>
+
+By default, the memory module processes all document embeddings again for every question, which takes 74 ms for one
+million documents. The memory cache instead computes the keys and values of its cross-attention layers once, when the
+documents are written, so that each question only attends over them. A question then takes 8.1 ms for one million
+documents and 33 ms for four million, and `torch.compile` brings the one-million case down to 5.0 ms. The cache
+takes four times the memory of the embeddings, 80 GiB for four million documents, which still fits on one GPU. Its
+memory tokens match the default up to bfloat16 rounding, and FactKG accuracy stays within 0.06 points of the default.
+
+The cache is off by default. Continuing the example above, the following writes the collection once and then answers
+questions from it.
+
+```python
+model = MemoryVLLM.from_pretrained("memorilla/Memorilla-Qwen3-8B", "pmv2", memory_cache=True, compile_memory=True)
+collection = model.write(row["documents"])  # encodes the documents and caches the memory module's keys and values
+answer = model.answer(row["question"], collection, system_prompt=PERSONA_PROMPT)
+```
+
+For evaluation, pass `--memory_cache` and `--compile_memory` to `evaluate.py`. The
+[profiling guide](profiling/README.md) has the full results on B200 and A100 GPUs and the commands that produce the
+figure.
 
 ## Training and Evaluation
 
@@ -216,6 +247,7 @@ goal.
 | [Evaluation](docs/evaluation.md) | Benchmarks, metrics, outputs, and the closed-book, RAG and full-context baselines |
 | [PersonalizationV4](personalizationv4/README.md) | Task and scoring, data format, generation pipeline, regeneration, license |
 | [Reinforcement learning](rl/README.md) | TextWorld setup, installation, data, training and evaluation |
+| [Profiling](profiling/README.md) | Memory cache for inference, latency and GPU memory of the memory module, results on B200 and A100 |
 | [Troubleshooting](docs/troubleshooting.md) | Multi-GPU stalls, slow evaluation, offline machines |
 
 ## Development

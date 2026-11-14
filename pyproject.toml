@@ -76,5 +76,5 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["memorilla", "personalizationv4"]
+known-first-party = ["memorilla", "personalizationv4", "profiling"]
 force-sort-within-sections = true

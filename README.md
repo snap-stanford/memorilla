@@ -277,6 +277,16 @@ run untrusted ones in an isolated environment.
   [GHSA-63cw-57p8-fm3p](https://github.com/advisories/GHSA-63cw-57p8-fm3p)). They apply only to untrusted models and
   checkpoints.
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=snap-stanford%2Fmemorilla&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=snap-stanford/memorilla&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=snap-stanford/memorilla&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=snap-stanford/memorilla&type=date&legend=top-left" />
+ </picture>
+</a>
+
 ## Citation
 
 ```bibtex

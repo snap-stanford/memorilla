@@ -355,10 +355,11 @@ def embed_texts(engine: "LLM", texts: list[str], chunk_size: int = EMBED_CHUNK_S
     if not texts:
         return np.zeros((0, 0), dtype=np.float16)
 
-    probe = engine.embed([texts[0]], use_tqdm=False)
-    embeddings = np.empty((len(texts), len(probe[0].outputs.embedding)), dtype=np.float16)
+    embeddings = None
     for start in range(0, len(texts), chunk_size):
         outputs = engine.embed(texts[start : start + chunk_size])
+        if embeddings is None:
+            embeddings = np.empty((len(texts), len(outputs[0].outputs.embedding)), dtype=np.float16)
         for offset, output in enumerate(outputs):
             embeddings[start + offset] = output.outputs.embedding
     return embeddings

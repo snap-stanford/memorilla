@@ -355,6 +355,9 @@ def embed_texts(engine: "LLM", texts: list[str], chunk_size: int = EMBED_CHUNK_S
     if not texts:
         return np.zeros((0, 0), dtype=np.float16)
 
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive.")
+
     embeddings = None
     for start in range(0, len(texts), chunk_size):
         outputs = engine.embed(texts[start : start + chunk_size])

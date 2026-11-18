@@ -20,3 +20,11 @@ def test_embed_texts_submits_each_text_once(count: int, chunk_size: int) -> None
     )
     assert actual.dtype == np.float16
     assert np.array_equal(actual, expected)
+
+
+@pytest.mark.parametrize("chunk_size", [0, -1])
+def test_embed_texts_rejects_nonpositive_chunk_size(chunk_size: int) -> None:
+    encoder = FakeEncoder()
+    with pytest.raises(ValueError, match="chunk_size must be positive"):
+        embed_texts(encoder, ["text"], chunk_size=chunk_size)
+    assert encoder.calls == []

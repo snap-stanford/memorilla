@@ -8,8 +8,10 @@ import os
 from pathlib import Path
 
 HOME = Path(os.environ.get("MEMORILLA_HOME", ".")).expanduser()
-DATA_DIR = Path(os.environ.get("MEMORILLA_DATA_DIR", str(HOME / "data"))).expanduser()
-RESULTS_DIR = HOME / "results"
+# Defaults go through resolve(), which already prefixes a relative HOME.
+_BASE = HOME if HOME.is_absolute() else Path()
+DATA_DIR = Path(os.environ.get("MEMORILLA_DATA_DIR", str(_BASE / "data"))).expanduser()
+RESULTS_DIR = _BASE / "results"
 MODEL_CACHE_DIR = os.environ.get("MEMORILLA_MODEL_CACHE") or None
 
 DATA_REPO = os.environ.get("MEMORILLA_DATA_REPO", "memorilla/Memorilla-Data")

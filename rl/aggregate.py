@@ -48,9 +48,10 @@ def load_rollouts(eval_dir: Path) -> list[dict[str, Any]]:
         raise ValueError(f"{eval_dir} holds several evaluations ({names}); pass one of their directories instead.")
 
     files = [path for directory in dump_dirs for path in sorted(directory.glob("*.jsonl")) if path.name != SUMMARY_FILE]
-    if not files:
+    rollouts = [json.loads(line) for path in files for line in path.read_text().splitlines() if line.strip()]
+    if not rollouts:
         raise FileNotFoundError(f"No dumped evaluation rollouts under {eval_dir}.")
-    return [json.loads(line) for path in files for line in path.read_text().splitlines() if line.strip()]
+    return rollouts
 
 
 def _final_reward(rollout: dict[str, Any]) -> float:

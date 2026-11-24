@@ -68,3 +68,12 @@ def test_load_rollouts_skips_summary(tmp_path: Path) -> None:
 
     assert len(load_rollouts(tmp_path)) == 4
     assert len(load_rollouts(dump_dir)) == 4
+
+
+@pytest.mark.parametrize("content", ["", " \n\n"], ids=["empty", "blank-lines"])
+def test_load_rollouts_rejects_dump_without_records(tmp_path: Path, content: str) -> None:
+    """An existing tier file may contain no rollout records."""
+    (tmp_path / "medium.jsonl").write_text(content)
+
+    with pytest.raises(FileNotFoundError, match="No dumped evaluation rollouts"):
+        load_rollouts(tmp_path)

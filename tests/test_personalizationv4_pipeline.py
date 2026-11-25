@@ -323,14 +323,26 @@ def test_build_dataset_splits(tmp_path: Path) -> None:
     assert row["documents"] == [f"Leo: chat {index} of 4\nAssistant: ok" for index in range(12)]
 
 
-def test_build_dataset_rejects_unknown_hard_questions(tmp_path: Path) -> None:
-    """Hard-subset entries must point to evaluation questions."""
+@pytest.mark.parametrize(
+    "invalid_entry", ["1,0", "4,10", "5,0"], ids=["training-user", "unknown-question", "missing-user"]
+)
+def test_build_dataset_rejects_unknown_hard_questions_without_overwriting_outputs(
+    tmp_path: Path, invalid_entry: str
+) -> None:
+    """Preserves the existing dataset if the hard subset contains a non-test question."""
     write_user(tmp_path / "users", 1, 10, num_chats=2)
     write_user(tmp_path / "users", 4, 10, num_chats=2)
     hard_path = tmp_path / "hard.csv"
-    hard_path.write_text("user_id,question_index\n1,0\n", encoding="utf-8")
+    hard_path.write_text("user_id,question_index\n4,0\n", encoding="utf-8")
+    output_dir = tmp_path / "data"
+    build(tmp_path / "users", output_dir, range(1, 2), range(4, 6), 0.1, 23, hard_path, "user_id")
+    original_outputs = {path.name: path.read_bytes() for path in output_dir.iterdir()}
+
+    hard_path.write_text(f"user_id,question_index\n{invalid_entry}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="hard-subset"):
-        build(tmp_path / "users", tmp_path / "data", range(1, 2), range(4, 5), 0.1, 23, hard_path, "user_id")
+        build(tmp_path / "users", output_dir, range(1, 2), range(4, 6), 0.2, 23, hard_path, "user_id")
+
+    assert {path.name: path.read_bytes() for path in output_dir.iterdir()} == original_outputs
 
 
 def test_split_rule_matches_datasets_train_test_split() -> None:

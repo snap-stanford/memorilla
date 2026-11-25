@@ -216,7 +216,8 @@ def build(
     Users present in ``users_dir`` and in ``train_users`` are split per user into train and validation; users in
     ``test_users`` go to test with all their questions in ``qa.csv`` order. Rows are grouped by ascending user id with
     one parquet row group per user. ``user_splits.csv`` lists every released user with its role (``training`` or
-    ``evaluation``) and its number of questions in each split and in the hard subset.
+    ``evaluation``) and its number of questions in each split and in the hard subset. Hard-subset entries are
+    validated before any output files are opened.
 
     Args:
         users_dir: Directory of ``user_N/`` folders, each with ``qa.csv`` and ``chats/``.
@@ -239,11 +240,11 @@ def build(
 
     users = find_users(users_dir)
     hard = read_hard_subset(hard_subset)
+    _validate_hard_subset(hard, users, test_users)
     schema = make_schema(id_column)
     output_dir.mkdir(parents=True, exist_ok=True)
     writers = {split: pq.ParquetWriter(output_dir / f"{split}.parquet", schema) for split in SPLITS}
     counts = dict.fromkeys(SPLITS, 0)
-    test_keys = set()
     user_rows = []
 
     try:
@@ -261,7 +262,6 @@ def build(
                 }
             else:
                 parts = {"test": questions}
-                test_keys.update((user_id, question.index) for question in questions)
 
             for split, selected in parts.items():
                 writers[split].write_table(make_table(user_id, selected, documents, hard, schema))
@@ -284,8 +284,6 @@ def build(
         splits_writer.writeheader()
         splits_writer.writerows(user_rows)
 
-    if hard - test_keys:
-        raise ValueError(f"{len(hard - test_keys)} hard-subset entries do not match a test question")
     return counts
 
 
@@ -336,6 +334,17 @@ def main(args: argparse.Namespace) -> None:
     )
     for split, count in counts.items():
         LOGGER.info("%s: %d rows -> %s", split, count, args.output_dir / f"{split}.parquet")
+
+
+def _validate_hard_subset(hard: set[tuple[int, int]], users: dict[int, Path], test_users: range) -> None:
+    """Checks that each hard-subset entry references a question from an evaluation user."""
+    unmatched = hard.copy()
+    referenced_users = {user_id for user_id, _ in hard if user_id in test_users and user_id in users}
+    for user_id in sorted(referenced_users):
+        questions = read_questions(users[user_id] / "qa.csv")
+        unmatched.difference_update((user_id, question.index) for question in questions)
+    if unmatched:
+        raise ValueError(f"{len(unmatched)} hard-subset entries do not match a test question")
 
 
 if __name__ == "__main__":

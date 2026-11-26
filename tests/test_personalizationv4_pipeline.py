@@ -231,7 +231,10 @@ def test_parse_and_shuffle_keep_answers() -> None:
     records = parse_questions(text)
     assert len(records) == 2
     assert records[0]["choice_c"] == "Option charlie for Stem?"
-    assert records[0]["rationale"].startswith("Because of the persona.")
+    assert records[0]["rationale"] == "Because of the persona."
+
+    without_word_counts = QUESTION_BLOCK.format(stem="Stem?", letter="C").split("<WORD_COUNTS>", 1)[0]
+    assert parse_questions(without_word_counts)[0]["rationale"] == "Because of the persona."
 
     shuffled = shuffle_choices(records, random.Random(1))
     assert len(shuffled) == 1

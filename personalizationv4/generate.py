@@ -34,7 +34,7 @@ QA_PATTERNS = {
     "choice_d": r"<CHOICE_D>\s*(.*?)(?=<CHOICE_E>|$)",
     "choice_e": r"<CHOICE_E>\s*(.*?)(?=<CORRECT_CHOICE>|$)",
     "correct_choice": r"<CORRECT_CHOICE>\s*([A-E])\b",
-    "rationale": r"<RATIONALE[^>]*>\s*(.*?)$",
+    "rationale": r"<RATIONALE[^>]*>\s*(.*?)(?=<WORD_COUNTS>|$)",
 }
 NUMBERED_ITEM = re.compile(r"^\d+\.\s*")
 CORRECT_LETTER = re.compile(r"^[A-E]", re.IGNORECASE)

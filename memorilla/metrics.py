@@ -45,8 +45,28 @@ if TYPE_CHECKING:
 
 CHAT_TOKEN_PATTERN = re.compile(r"<\|(?:im_end|im_start|endoftext|im_sep)\|>")
 ARTICLES_PATTERN = re.compile(r"\b(a|an|the)\b", re.UNICODE)
-PUNCTUATION = set(string.punctuation)
+ARABIC_DEFINITE_PREFIX_PATTERN = re.compile(r"(?<!\S)ال(?=[\u0621-\u064A]{2,})")
+ARABIC_DIACRITICS_PATTERN = re.compile(r"[\u064B-\u065F\u0670\u0640]")
+NON_ASCII_PATTERN = re.compile(r"[^\x00-\x7F]")
+UNICODE_WORD_PATTERN = re.compile(r"\w+", re.UNICODE)
+ARABIC_DIGIT_TRANS = str.maketrans("٠١٢٣٤٥٦٧٨٩٫٬", "0123456789.,")
+ARABIC_ALEF_TRANS = str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا"})
+PUNCTUATION = set(string.punctuation) | {"،", "؟", "؛", "«", "»", "“", "”", "’", "‘", "…"}
 POLARITY_WORDS = {"yes", "no", "maybe"}
+ARABIC_POLARITY_MAP = {
+    "نعم": "yes",
+    "اجل": "yes",
+    "أجل": "yes",
+    "بلى": "yes",
+    "صحيح": "yes",
+    "لا": "no",
+    "كلا": "no",
+    "خطأ": "no",
+    "خطا": "no",
+    "ربما": "maybe",
+    "محتمل": "maybe",
+    "قد": "maybe",
+}
 LIST_MARKERS = ("-", "*", "•")
 QUOTES = ('"', "'")
 NUMBERED_MARKERS = ("1.", "2.", "3.")
@@ -70,7 +90,7 @@ def clean_generation(text: str) -> str:
 
 
 def _tokenize(text: str) -> list[str]:
-    """Lower-case whitespace tokenisation used by the generation metrics.
+    """Lower-case whitespace tokenisation used by the generation metrics (with Arabic/Unicode normalisation).
 
     Args:
         text: Input text.
@@ -78,6 +98,8 @@ def _tokenize(text: str) -> list[str]:
     Returns:
         Tokens.
     """
+    if NON_ASCII_PATTERN.search(text):
+        return [tok for tok in (_normalize_arabic_token(w) for w in UNICODE_WORD_PATTERN.findall(text.lower())) if tok]
     return text.lower().split()
 
 
@@ -100,8 +122,48 @@ def bleu(predictions: Sequence[str], references: Sequence[str]) -> dict[str, flo
     }
 
 
+def _normalize_arabic_token(token: str) -> str:
+    """Normalize an Arabic token for lexical/ROUGE comparison (strip diacritics, tatweel, Alef variants, leading ال)."""
+    token = ARABIC_DIACRITICS_PATTERN.sub("", token).translate(ARABIC_DIGIT_TRANS).translate(ARABIC_ALEF_TRANS)
+    if len(token) >= 4 and token.startswith("ال"):
+        token = token[2:]
+    return token
+
+
+def _lcs_length(xs: list[str], ys: list[str]) -> int:
+    """Compute Longest Common Subsequence length between two token lists."""
+    if not xs or not ys:
+        return 0
+    dp = [0] * (len(ys) + 1)
+    for x in xs:
+        prev = 0
+        for j, y in enumerate(ys, start=1):
+            temp = dp[j]
+            if x == y:
+                dp[j] = prev + 1
+            elif dp[j - 1] > dp[j]:
+                dp[j] = dp[j - 1]
+            prev = temp
+    return dp[-1]
+
+
+def _unicode_rouge_pair(reference: str, prediction: str) -> tuple[float, float]:
+    """Compute (ROUGE-1 F1, ROUGE-L F1) for non-ASCII / Arabic text where google-research rouge_score strips tokens."""
+    ref_tokens = [_normalize_arabic_token(t) for t in UNICODE_WORD_PATTERN.findall(reference.lower())]
+    pred_tokens = [_normalize_arabic_token(t) for t in UNICODE_WORD_PATTERN.findall(prediction.lower())]
+    ref_tokens = [t for t in ref_tokens if t]
+    pred_tokens = [t for t in pred_tokens if t]
+    if not ref_tokens or not pred_tokens:
+        return 0.0, 0.0
+    overlap = sum(min(pred_tokens.count(t), ref_tokens.count(t)) for t in set(pred_tokens) & set(ref_tokens))
+    r1 = (2.0 * overlap / (len(pred_tokens) + len(ref_tokens))) if overlap > 0 else 0.0
+    lcs = _lcs_length(ref_tokens, pred_tokens)
+    rl = (2.0 * lcs / (len(pred_tokens) + len(ref_tokens))) if lcs > 0 else 0.0
+    return r1, rl
+
+
 def rouge(predictions: Sequence[str], references: Sequence[str]) -> dict[str, float]:
-    """Mean ROUGE-1 and ROUGE-L F-measure with Porter stemming.
+    """Mean ROUGE-1 and ROUGE-L F-measure with Porter stemming (and Unicode/Arabic fallback when non-ASCII is present).
 
     Args:
         predictions: Generated texts.
@@ -111,13 +173,21 @@ def rouge(predictions: Sequence[str], references: Sequence[str]) -> dict[str, fl
         ``rouge1`` and ``rougeL``.
     """
     scorer = rouge_scorer.RougeScorer([ROUGE1, ROUGEL], use_stemmer=True)
-    scores = [
-        scorer.score(reference, prediction.strip())
-        for prediction, reference in zip(predictions, references, strict=True)
-    ]
+    r1_scores: list[float] = []
+    rl_scores: list[float] = []
+    for prediction, reference in zip(predictions, references, strict=True):
+        pred_clean = prediction.strip()
+        if NON_ASCII_PATTERN.search(reference) or NON_ASCII_PATTERN.search(pred_clean):
+            r1, rl = _unicode_rouge_pair(reference, pred_clean)
+            r1_scores.append(r1)
+            rl_scores.append(rl)
+        else:
+            score = scorer.score(reference, pred_clean)
+            r1_scores.append(score[ROUGE1].fmeasure)
+            rl_scores.append(score[ROUGEL].fmeasure)
     return {
-        ROUGE1: float(np.mean([score[ROUGE1].fmeasure for score in scores])),
-        ROUGEL: float(np.mean([score[ROUGEL].fmeasure for score in scores])),
+        ROUGE1: float(np.mean(r1_scores)) if r1_scores else 0.0,
+        ROUGEL: float(np.mean(rl_scores)) if rl_scores else 0.0,
     }
 
 
@@ -225,7 +295,7 @@ def generation_metrics(
 
 
 def normalize_answer(text: str) -> str:
-    """SQuAD answer normalisation: lower-case, drop punctuation and articles, collapse whitespace.
+    """SQuAD answer normalisation: lower-case, drop punctuation and articles (English & Arabic), collapse whitespace.
 
     Args:
         text: Input text.
@@ -235,8 +305,11 @@ def normalize_answer(text: str) -> str:
     """
     if not text:
         return ""
+    text = ARABIC_DIACRITICS_PATTERN.sub("", text).translate(ARABIC_DIGIT_TRANS).translate(ARABIC_ALEF_TRANS)
     text = "".join(character for character in text.lower() if character not in PUNCTUATION)
-    return " ".join(ARTICLES_PATTERN.sub(" ", text).split())
+    text = ARTICLES_PATTERN.sub(" ", text)
+    text = ARABIC_DEFINITE_PREFIX_PATTERN.sub("", text)
+    return " ".join(text.split())
 
 
 def exact_match(predictions: Sequence[str], references: Sequence[str]) -> float:
@@ -281,8 +354,11 @@ def first_polarity(text: str) -> str | None:
             break
     if not text:
         return None
-    head = text.split()[0].rstrip(".,!?:;\"'").lower()
-    return head if head in POLARITY_WORDS else None
+    head = text.split()[0].rstrip(".,!?:;\"'،؟؛«»").lower()
+    if head in POLARITY_WORDS:
+        return head
+    head_norm = ARABIC_DIACRITICS_PATTERN.sub("", head)
+    return ARABIC_POLARITY_MAP.get(head_norm)
 
 
 def polarity_accuracy(predictions: Sequence[str], references: Sequence[str]) -> float:

@@ -66,6 +66,8 @@ class MemoryLLM(nn.Module):
         """
         super().__init__()
         self.memory = memory
+        if attn_implementation == "flash_attention_2" and not torch.cuda.is_available():
+            attn_implementation = "sdpa"
         self.text_model = AutoModelForCausalLM.from_pretrained(
             decoder,
             cache_dir=cache_dir,
